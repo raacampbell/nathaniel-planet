@@ -44,7 +44,7 @@
   #card h2{margin:0 0 4px;font-size:20px;color:var(--accent)}
   #card p{margin:0;font-size:15px;line-height:1.35}
   #card button{position:absolute;right:10px;top:8px;background:none;border:0;color:var(--dim);font:inherit;font-size:20px;cursor:pointer}
-  #bar{position:fixed;right:14px;top:14px;display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+  #bar{position:fixed;right:14px;top:calc(env(safe-area-inset-top,0px) + 33px);display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
   .btn{font:inherit;font-size:14px;color:var(--txt);background:#1b1040cc;border:2px solid var(--edge);
     border-radius:999px;padding:7px 14px;cursor:pointer;backdrop-filter:blur(4px)}
   .btn:hover,.btn.on{background:#3b1fa3}
@@ -61,7 +61,7 @@
   @keyframes updjiggle{0%,45%,100%{transform:rotate(0)}8%{transform:rotate(-13deg)}16%{transform:rotate(11deg)}24%{transform:rotate(-8deg)}32%{transform:rotate(5deg)}40%{transform:rotate(-2deg)}}
   #updMsg{position:fixed;right:60px;bottom:19px;z-index:21;font-size:13px;padding:4px 12px;border-radius:999px;background:var(--card);border:2px solid var(--edge);opacity:0;transition:opacity .3s;pointer-events:none}
   #updMsg.on{opacity:1}
-  #places{position:fixed;right:14px;top:62px;width:210px;max-height:calc(100% - 140px);overflow:auto;
+  #places{position:fixed;right:14px;top:calc(env(safe-area-inset-top,0px) + 81px);width:210px;max-height:calc(100% - 170px);overflow:auto;
     background:var(--card);border:2px solid var(--edge);border-radius:16px;padding:8px;display:none}
   #places.on{display:block}
   #places button{display:block;width:100%;text-align:left;font:inherit;font-size:14px;color:var(--txt);
