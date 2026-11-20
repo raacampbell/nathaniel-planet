@@ -329,7 +329,7 @@
     for (let i = 0; i < n; i++) {
       const a0 = i / n * Math.PI * 2, a1 = (i + 1) / n * Math.PI * 2, am = (a0 + a1) / 2;
       const gate = gates.some(g => Math.abs(Math.atan2(Math.sin(am - g), Math.cos(am - g))) < Math.PI / n * 0.99);
-      const x0 = Math.sin(a0) * R, z0 = Math.cos(a0) * R, x1 = Math.sin(a1) * R, z1 = Math.cos(a1) * R, mx = (x0 + x1) / 2, mz = (z0 + z1) / 2, L = Math.hypot(x1 - x0, z1 - z0);
+      const e0 = o.edge ? o.edge(a0) : 1, e1 = o.edge ? o.edge(a1) : 1, x0 = Math.sin(a0) * R * e0, z0 = Math.cos(a0) * R * e0, x1 = Math.sin(a1) * R * e1, z1 = Math.cos(a1) * R * e1, mx = (x0 + x1) / 2, mz = (z0 + z1) / 2, L = Math.hypot(x1 - x0, z1 - z0);
       const f = W.frame(mx, W.sag(mx, mz), mz, Math.atan2(x1 - x0, z1 - z0) + Math.PI / 2);
       if (gate) {
         for (const s of [-1, 1]) { f(P.CYL12, s * L * 0.42, 0, 0, 0.7, H * 1.7, 0.7, 0, wc, 0.04); f(P.CONE12, s * L * 0.42, H * 1.7, 0, 0.9, 0.85, 0.9, 0, o.roofC || 0xc0503a, 0.04); }
@@ -391,7 +391,7 @@
     for (let x = -R; x <= R; x += 0.45) for (let z = -R; z <= R; z += 0.45) {
       const jx = x + (rnd() - 0.5) * 0.4, jz = z + (rnd() - 0.5) * 0.4, r = Math.hypot(jx, jz);
       const edge = R * (0.82 + 0.18 * Math.sin(Math.atan2(jx, jz) * 3 + o.seed));      // ragged town edge
-      if (r > (walled ? wallR - 1.0 : edge) || r < sqR) continue;
+      if (r > (walled ? wallR * o.edge(Math.atan2(jx, jz)) - 1.0 : edge) || r < sqR) continue;
       const sd = streetD(jx, jz); if (sd < 0.55 || sd > 2.4 + (r < ringR ? 0 : 1.5)) continue;
       cand.push([jx, jz, sd + r * 0.02 + rnd() * 0.3]);
     }
@@ -419,7 +419,7 @@
     // gardens and street trees in the gaps
     for (let i = 0; i < R * R * 1.4; i++) {
       const a = rnd() * 6.28, r = sqR + rnd() * (R * 1.05 - sqR), x = Math.sin(a) * r, z = Math.cos(a) * r;
-      if (!free(x, z, 0.35) || !onLand(x, z) || streetD(x, z) < 0.5 || railNear(x, z, 0.8) || (walled && Math.abs(r - wallR) < 0.6)) continue;
+      if (!free(x, z, 0.35) || !onLand(x, z) || streetD(x, z) < 0.5 || railNear(x, z, 0.8) || (walled && Math.abs(r - wallR * o.edge(a)) < 0.6)) continue;
       occ.push([x, z, 0.35]); tree(W, rnd, x, z, desert ? 'palm' : rnd() < 0.35 ? 'pine' : 'round');
     }
     // lamp posts round the square
@@ -438,7 +438,8 @@
       const sd = plan.streetD(x, z);
       const st = 1 - Math.min(1, Math.max(0, (sd - 0.3) / 0.2)), sq = r < plan.sqR ? 1 : 0, k = Math.max(st, sq), hh = Math.sin(i * 12.9898 + j * 78.233) * 43758.5453, chk = (hh - Math.floor(hh)) < 0.5 ? cob : cob2;
       const c = [dirt[0] + (chk[0] - dirt[0]) * k, dirt[1] + (chk[1] - dirt[1]) * k, dirt[2] + (chk[2] - dirt[2]) * k];
-      g.push({ x, z, on, c, a: on ? Math.max(k * (r < R * 0.95 ? 1 : 0), 1 - Math.min(1, Math.max(0, (r - R * 0.7) / (R * 0.25)))) : 0 });
+      const er = o.R * o.edge(Math.atan2(x, z));
+      g.push({ x, z, on, c, a: on ? Math.max(k * (r < er * 0.95 ? 1 : 0), 1 - Math.min(1, Math.max(0, (r - er * 0.7) / (er * 0.25)))) : 0 });
     }
     const v = new T.Vector3(), nrm = new T.Vector3();
     const push = (q) => { v.set(q.x, W.sag(q.x, q.z) + 0.07, q.z).applyMatrix4(o.root); nrm.copy(v).normalize(); out.p.push(v.x, v.y, v.z); out.n.push(nrm.x, nrm.y, nrm.z); out.c.push(q.c[0], q.c[1], q.c[2], q.a); };
@@ -570,7 +571,7 @@
     const B = space ? 3.0 : 3.2, RW = 0.5, ga = rnd() * Math.PI, cg = Math.cos(ga), sg = Math.sin(ga);
     const toG = (x, z) => [x * cg - z * sg, x * sg + z * cg], fromG = (u, v) => [u * cg + v * sg, -u * sg + v * cg];
     const ringR = R * 0.88;
-    const streetD = (x, z) => { const [u, v] = toG(x, z), mu = Math.abs(((u % B) + B) % B - B / 2), mv = Math.abs(((v % B) + B) % B - B / 2); return Math.min(B / 2 - mu, B / 2 - mv, Math.abs(Math.hypot(x, z) - ringR)); };
+    const streetD = (x, z) => { const [u, v] = toG(x, z), mu = Math.abs(((u % B) + B) % B - B / 2), mv = Math.abs(((v % B) + B) % B - B / 2); return Math.min(B / 2 - mu, B / 2 - mv); };
     for (const p of o.rail) occ.push([p[0], p[1], 0.8]);
     if (o.station) for (const s2 of o.station) { if (!land(s2[0], s2[1])) continue; LM.station(W, rnd, s2[0], s2[1], s2[2], o); const c = Math.cos(s2[2]), sn = Math.sin(s2[2]); for (let k = 0; k <= 3; k++) occ.push([s2[0] + 1.3 * c + k * sn, s2[1] - 1.3 * sn + k * c, 0.85]); }
     // the old town survives in the middle: its landmark, in a little park
@@ -625,7 +626,8 @@
     const asphalt = col(space ? 0x55606e : 0x6a6e78), pave = col(space ? 0xe6eef2 : 0xcfc9bd), grass = col(o.biome === 'desert' ? 0xe0c48a : 0x7cc455), side = col(space ? 0xbfe9f0 : 0xb5afa3);
     const paint = (x, z) => {
       const r = Math.hypot(x, z); if (r > R * 1.02) return null;
-      const sd = streetD(x, z), fade = 1 - Math.max(0, (r - ringR) / (R * 1.02 - ringR));
+      const er = R * o.edge(Math.atan2(x, z)), sd = streetD(x, z), fade = 1 - Math.min(1, Math.max(0, (r - (er - B * 0.9)) / (B * 0.9)));
+      if (fade <= 0) return null;
       if (sd < RW * 0.75) return [asphalt, Math.max(0.3, fade)];
       if (sd < RW) return [side, fade];
       for (const p of parks) if (Math.abs(p[0] - x) < B / 2 && Math.abs(p[1] - z) < B / 2) return [grass, fade];
@@ -637,6 +639,13 @@
   function build(THREE, o) {
     T = THREE; prims();
     let s = o.seed >>> 0 || 1; const rnd = () => { s = (s + 0x6D2B79F5) | 0; let t = Math.imul(s ^ (s >>> 15), 1 | s); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    // every town gets its own outline: a lumpy, stretched blob instead of a circle
+    const H = []; for (let k = 1; k <= 6; k++) H.push([k, (k === 2 ? 0.16 : 0.09) * rnd() / Math.sqrt(k), rnd() * 6.283]);
+    const raw = a => { let f = 1; for (const [k, c, p] of H) f += c * Math.cos(k * a + p); return f; };
+    let mx = 0, mn = 9; for (let i = 0; i < 360; i++) { const v = raw(i / 360 * 6.283); mx = Math.max(mx, v); mn = Math.min(mn, v); }
+    const edge = a => 0.62 + 0.38 * (raw(a) - mn) / (mx - mn + 1e-9);               // 0.62 .. 1 of the full radius
+    const land0 = o.land, R0 = o.R;
+    o = Object.assign({}, o, { edge, land: (x, z) => Math.hypot(x, z) <= R0 * edge(Math.atan2(x, z)) && land0(x, z) });
     const W = makeWriter(o.root, o.sagK);
     W.prim = PRIM; W.gnd = new Acc();
     const plan = o.age === 'stone' ? buildFarm(W, rnd, o) : o.age === 'modern' ? buildMetro(W, rnd, o, false) : o.age === 'space' ? buildMetro(W, rnd, o, true) : buildTown(W, rnd, o);
