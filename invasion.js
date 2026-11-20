@@ -510,5 +510,6 @@ body.invading #invAlert{opacity:1}
     }
     return { end, skipTo(t) { invT = t; }, advance(sec) { for (let k = 0; k < sec * 10 && !done; k++) tick(performance.now() / 1000, 0.1); }, saucers, aliens, jets };
   }
+  injectCSS(); // the button's own styling and its age rule must exist before the dialog is ever opened
   root.NPInvasion = { confirm: confirmDialog, start };
 })(typeof window !== 'undefined' ? window : globalThis);
