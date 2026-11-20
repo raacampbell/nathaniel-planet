@@ -148,7 +148,7 @@ controls.dampingFactor = 0.07;
 controls.minDistance = 1.06;
 controls.maxDistance = 6;
 controls.autoRotate = true;
-controls.autoRotateSpeed = 0.6;
+controls.autoRotateSpeed = 0.3;
 
 const planetGroup = new T.Group();
 scene.add(planetGroup);
@@ -973,16 +973,30 @@ function build() {
       S.rx = Math.random() * 6; S.ry = Math.random() * 6; S.rz = Math.random() * 6; S.wx = R(-3, 3); S.wz = R(-3, 3);
     };
     for (let i = 0; i < NR; i++) { const S = {}; spawn(S, true); rain.push(S); nm.setColorAt(i, tmp.set(nugCols[i % 4])); }
+    const pile = [];
     for (let i = 0; i < NP; i++) {     // nuggets already lying around the foot
       const a = Math.random() * 6.283, r = 0.2 + Math.random() * 0.15, sz = R(0.022, 0.034), stack = i % 5 === 0;
-      put(NR + i, Math.cos(a) * r, sz * 0.55 + (stack ? sz * 0.8 : 0), Math.sin(a) * r, Math.random() * 0.4, Math.random() * 6, Math.random() * 0.4, sz);
+      const P0 = [Math.cos(a) * r, sz * 0.55 + (stack ? sz * 0.8 : 0), Math.sin(a) * r, Math.random() * 0.4, Math.random() * 6, Math.random() * 0.4, sz];
+      pile.push(P0); put(NR + i, ...P0);
       nm.setColorAt(NR + i, tmp.set(nugCols[(i + 1) % 4]));
     }
     nm.instanceColor.needsUpdate = true;
     g.add(nm, ni);
-    let boost = 0;
+    let boost = 0, rainOn = true;
+    /* used by the alien invasion: barbecue the nuggets, eat them, put everything back */
+    const baseCols = []; for (let i = 0; i < NT; i++) { const c0 = new T.Color(); nm.getColorAt(i, c0); baseCols.push(c0); }
+    const burnt = new T.Color(0x6a2e10), bodyMat = body.material;
+    const api = {
+      g, sk,
+      bbq(k) { for (let i = 0; i < NT; i++) nm.setColorAt(i, tmp.copy(baseCols[i]).lerp(burnt, k * (0.55 + 0.3 * ((i * 7) % 5) / 4))); nm.instanceColor.needsUpdate = true; bodyMat.color.setRGB(1 - 0.35 * k, 1 - 0.45 * k, 1 - 0.55 * k); },
+      eat(n) { for (let i = 0; i < NP; i++) { if (i < n) put(NR + i, 0, -1, 0, 0, 0, 0, 0.0001); else put(NR + i, ...pile[i]); } nm.instanceMatrix.needsUpdate = ni.instanceMatrix.needsUpdate = true; },
+      rain(on) { rainOn = on; },
+      pileWorld(i) { const q = pile[i % NP]; return g.localToWorld(new T.Vector3(q[0], 0, q[2])); },
+      reset() { api.bbq(0); api.eat(0); rainOn = true; },
+    };
     tickers.push((t, dt) => {
       boost = Math.max(0, boost - dt);
+      if (!rainOn) { for (let i = 0; i < NR; i++) put(i, 0, -1, 0, 0, 0, 0, 0.0001); nm.instanceMatrix.needsUpdate = ni.instanceMatrix.needsUpdate = true; return; }
       const f = boost > 0 ? 1.7 : 1;
       cloud.position.y = 0.58 + Math.sin(t * 0.8) * 0.008; cloud.rotation.y = t * 0.05;
       for (let i = 0; i < NR; i++) {
@@ -997,7 +1011,7 @@ function build() {
     placeOnSurface(g, site, 0.995, rng() * 6);
     planetGroup.add(g);
     const hitM = new T.Mesh(new T.CylinderGeometry(0.12, 0.19, 0.24, 10).translate(0, 0.12, 0), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
-    const V = { name, n: site.clone(), erupt: () => { boost = 5; } };      // a poke starts a proper downpour
+    const V = { name, n: site.clone(), erupt: () => { boost = 5; }, api };      // a poke starts a proper downpour
     hitM.userData = { kind: 'volcano', ref: V }; g.add(hitM); pickables.push(hitM);
     addLabel(name, site, 1 + 0.6 * sk + 0.05, 'volcano', () => select('volcano', V));
     volcanoes.push(V);
