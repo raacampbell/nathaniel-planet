@@ -40,7 +40,7 @@
   const hex = s => [parseInt(s.slice(1, 3), 16), parseInt(s.slice(3, 5), 16), parseInt(s.slice(5, 7), 16)];
   const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 
-  const LAND_FRACTION = 0.34;
+  const LAND_FRACTION = 0.425;
 
   function createPlanet(seed) {
     seed = seed | 0;

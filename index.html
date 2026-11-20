@@ -451,6 +451,18 @@ function build() {
     return out;
   };
 
+  // curvature flow: only points whose local turning radius is below Rmin get pulled toward their neighbours
+  const relaxCurves = (pts, spacing, Rmin, iters, ok) => {
+    const k0 = Math.max(1, Math.round(0.02 / spacing)), n = pts.length; let q = pts.map(v => v.clone());
+    const circR = (a, b, c) => { const ab = a.distanceTo(b), bc = b.distanceTo(c), ca = a.distanceTo(c), s = (ab + bc + ca) / 2, ar = Math.sqrt(Math.max(0, s * (s - ab) * (s - bc) * (s - ca))); return ar > 1e-12 ? ab * bc * ca / (4 * ar) : 9; };
+    for (let it = 0; it < iters; it++) {
+      let moved = false; const nq = q.map(v => v.clone());
+      for (let i = 1; i < n - 1; i++) { const k = Math.min(k0, i, n - 1 - i); if (circR(q[i - k], q[i], q[i + k]) < Rmin) { const c = q[i - k].clone().add(q[i + k]).addScaledVector(q[i], 2).normalize(); if (!ok || ok(c)) { nq[i].copy(c); moved = true; } } }
+      q = nq; if (!moved) break;
+    }
+    return q;
+  };
+
   /* ---------- railway: links the cities of the biggest continent (ice caps excluded) ---------- */
   const rail = { cities: [], edges: [], samples: [], trackMesh: null };
   {
@@ -508,6 +520,7 @@ function build() {
           if (landOnly(q)) { pts = q; break; }
         }
         let r = resamplePts(pts, 0.004);
+        { const q = relaxCurves(r, 0.004, 0.085, 4000, c => P.isLand([c.x, c.y, c.z]) && Math.abs(c.y) < 0.76); if (landOnly(q)) r = q; }   // no tight bends for the big trains
         r = r.filter(p => angle(p, A.c.n) > CITY_R && angle(p, B.c.n) > CITY_R);          // stop at the edge of each town square
         if (r.length < 6) continue;
         rail.edges.push({ a: A.c, b: B.c, pts: r });
@@ -1085,39 +1098,52 @@ function build() {
   });
   /* ---------- steam trains on the railway ---------- */
   function makeTrain(bodyCol, carCols) {
-    const g = new T.Group(), I = (mesh, s) => g.add(withInk(mesh, s || 1.14)), N = mesh => g.add(mesh);
+    const units = [];
+    // each vehicle is its own rigid piece, pivoting about its centre cx, so the train bends round curves
+    const unit = (cx, half, build) => {
+      const g = new T.Group(), I = (mesh, s) => g.add(withInk(mesh, s || 1.14)), N = mesh => g.add(mesh);
+      const wheel = (x, z, r) => N(new T.Mesh(new T.CylinderGeometry(r, r, 0.0016, 14).rotateX(Math.PI / 2).translate(x, r, z), toon(0xc94a3a)));
+      build(I, N, wheel);
+      const bk = makeBaker(); bk.add(g);
+      const out = new T.Group(); bk.finish(out); out.position.x = -cx;
+      const piv = new T.Group(); piv.add(out); units.push({ piv, cx, half });
+    };
     const cyl = (r1, r2, h) => new T.CylinderGeometry(r1, r2, h, 14);
-    const wheel = (x, z, r) => N(new T.Mesh(new T.CylinderGeometry(r, r, 0.0016, 14).rotateX(Math.PI / 2).translate(x, r, z), toon(0xc94a3a)));
     // locomotive
-    I(new T.Mesh(cyl(0.0075, 0.0075, 0.034).rotateZ(Math.PI / 2).translate(0.052, 0.0155, 0), toon(bodyCol)));
-    N(new T.Mesh(cyl(0.0078, 0.0078, 0.002).rotateZ(Math.PI / 2).translate(0.0695, 0.0155, 0), toon(0x2a2a30)));
-    I(new T.Mesh(new T.CylinderGeometry(0.0022, 0.003, 0.011, 8).translate(0.062, 0.0285, 0), toon(0x2a2a30)), 1.2);
-    N(new T.Mesh(new T.CylinderGeometry(0.0042, 0.0025, 0.003, 8).translate(0.062, 0.0355, 0), toon(0x1a1a1e)));
-    I(new T.Mesh(new T.SphereGeometry(0.0034, 8, 6).translate(0.048, 0.0238, 0), toon(0xd9a441)), 1.2);
-    I(new T.Mesh(new T.BoxGeometry(0.014, 0.016, 0.0155).translate(0.027, 0.0165, 0), toon(bodyCol)));
-    I(new T.Mesh(new T.BoxGeometry(0.016, 0.0024, 0.0175).translate(0.027, 0.0267, 0), toon(0x3a2a30)));
-    for (const z of [-1, 1]) N(new T.Mesh(new T.BoxGeometry(0.006, 0.005, 0.0006).translate(0.027, 0.019, z * 0.0078), toon(0xfff1a8)));
-    I(new T.Mesh(new T.BoxGeometry(0.052, 0.003, 0.012).translate(0.044, 0.0065, 0), toon(0x2f2a36)), 1.1);
-    for (const x of [0.036, 0.049, 0.0615]) for (const z of [-1, 1]) wheel(x, z * 0.0062, 0.0052);
-    I(new T.Mesh(new T.ConeGeometry(0.0062, 0.012, 3).rotateZ(-Math.PI / 2).translate(0.0755, 0.0065, 0), toon(0x2f2a36)), 1.15);
-    N(new T.Mesh(new T.SphereGeometry(0.0022, 6, 5).translate(0.0712, 0.0215, 0), toon(0xffe27a)));
+    unit(0.0465, 0.031, (I, N, wheel) => {
+      I(new T.Mesh(cyl(0.0075, 0.0075, 0.034).rotateZ(Math.PI / 2).translate(0.052, 0.0155, 0), toon(bodyCol)));
+      N(new T.Mesh(cyl(0.0078, 0.0078, 0.002).rotateZ(Math.PI / 2).translate(0.0695, 0.0155, 0), toon(0x2a2a30)));
+      I(new T.Mesh(new T.CylinderGeometry(0.0022, 0.003, 0.011, 8).translate(0.062, 0.0285, 0), toon(0x2a2a30)), 1.2);
+      N(new T.Mesh(new T.CylinderGeometry(0.0042, 0.0025, 0.003, 8).translate(0.062, 0.0355, 0), toon(0x1a1a1e)));
+      I(new T.Mesh(new T.SphereGeometry(0.0034, 8, 6).translate(0.048, 0.0238, 0), toon(0xd9a441)), 1.2);
+      I(new T.Mesh(new T.BoxGeometry(0.014, 0.016, 0.0155).translate(0.027, 0.0165, 0), toon(bodyCol)));
+      I(new T.Mesh(new T.BoxGeometry(0.016, 0.0024, 0.0175).translate(0.027, 0.0267, 0), toon(0x3a2a30)));
+      for (const z of [-1, 1]) N(new T.Mesh(new T.BoxGeometry(0.006, 0.005, 0.0006).translate(0.027, 0.019, z * 0.0078), toon(0xfff1a8)));
+      I(new T.Mesh(new T.BoxGeometry(0.052, 0.003, 0.012).translate(0.044, 0.0065, 0), toon(0x2f2a36)), 1.1);
+      for (const x of [0.036, 0.049, 0.0615]) for (const z of [-1, 1]) wheel(x, z * 0.0062, 0.0052);
+      I(new T.Mesh(new T.ConeGeometry(0.0062, 0.012, 3).rotateZ(-Math.PI / 2).translate(0.0755, 0.0065, 0), toon(0x2f2a36)), 1.15);
+      N(new T.Mesh(new T.SphereGeometry(0.0022, 6, 5).translate(0.0712, 0.0215, 0), toon(0xffe27a)));
+    });
     // tender with a pile of coal
-    I(new T.Mesh(new T.BoxGeometry(0.02, 0.011, 0.0145).translate(0.004, 0.0105, 0), toon(0x2f2a36)));
-    N(new T.Mesh(new T.SphereGeometry(0.0072, 8, 6).scale(1.3, 0.55, 1).translate(0.004, 0.0165, 0), toon(0x1a1a1e)));
-    for (const x of [-0.002, 0.01]) for (const z of [-1, 1]) wheel(x, z * 0.0062, 0.0042);
+    unit(0.004, 0.0105, (I, N, wheel) => {
+      I(new T.Mesh(new T.BoxGeometry(0.02, 0.011, 0.0145).translate(0.004, 0.0105, 0), toon(0x2f2a36)));
+      N(new T.Mesh(new T.SphereGeometry(0.0072, 8, 6).scale(1.3, 0.55, 1).translate(0.004, 0.0165, 0), toon(0x1a1a1e)));
+      for (const x of [-0.002, 0.01]) for (const z of [-1, 1]) wheel(x, z * 0.0062, 0.0042);
+      N(new T.Mesh(new T.BoxGeometry(0.006, 0.0015, 0.0015).translate(-0.0085, 0.0055, 0), toon(0x2a2a30)));
+    });
     // three carriages
     carCols.forEach((cc, i) => {
       const cx = -0.026 - i * 0.029;
-      I(new T.Mesh(new T.BoxGeometry(0.025, 0.012, 0.0135).translate(cx, 0.0105, 0), toon(cc)));
-      I(new T.Mesh(new T.BoxGeometry(0.0268, 0.003, 0.0148).translate(cx, 0.0181, 0), toon(0x8a3a52)), 1.1);
-      N(new T.Mesh(new T.BoxGeometry(0.025, 0.0025, 0.011).translate(cx, 0.0045, 0), toon(0x2f2a36)));
-      for (const z of [-1, 1]) for (const dx of [-0.008, 0, 0.008]) N(new T.Mesh(new T.BoxGeometry(0.0042, 0.0042, 0.0006).translate(cx + dx, 0.0118, z * 0.00685), toon(0xfff1a8)));
-      for (const dx of [-0.008, 0.008]) for (const z of [-1, 1]) wheel(cx + dx, z * 0.0058, 0.0038);
-      N(new T.Mesh(new T.BoxGeometry(0.004, 0.0015, 0.0015).translate(cx + 0.0145, 0.0055, 0), toon(0x2a2a30)));
+      unit(cx, 0.0125, (I, N, wheel) => {
+        I(new T.Mesh(new T.BoxGeometry(0.025, 0.012, 0.0135).translate(cx, 0.0105, 0), toon(cc)));
+        I(new T.Mesh(new T.BoxGeometry(0.0268, 0.003, 0.0148).translate(cx, 0.0181, 0), toon(0x8a3a52)), 1.1);
+        N(new T.Mesh(new T.BoxGeometry(0.025, 0.0025, 0.011).translate(cx, 0.0045, 0), toon(0x2f2a36)));
+        for (const z of [-1, 1]) for (const dx of [-0.008, 0, 0.008]) N(new T.Mesh(new T.BoxGeometry(0.0042, 0.0042, 0.0006).translate(cx + dx, 0.0118, z * 0.00685), toon(0xfff1a8)));
+        for (const dx of [-0.008, 0.008]) for (const z of [-1, 1]) wheel(cx + dx, z * 0.0058, 0.0038);
+        N(new T.Mesh(new T.BoxGeometry(0.006, 0.0015, 0.0015).translate(cx + 0.0135, 0.0055, 0), toon(0x2a2a30)));
+      });
     });
-    const bk = makeBaker(); bk.add(g);
-    const out = new T.Group(); bk.finish(out);
-    return out;
+    return units;
   }
   const TRAIN_SPECS = [
     { name: 'The Chuffington Flyer', captain: 'Driver Ada Coalbrook',
@@ -1153,7 +1179,7 @@ function build() {
     const pairs = [];
     for (let i = 0; i < rail.cities.length; i++) for (let j = i + 1; j < rail.cities.length; j++) {
       const st = treePath(rail.cities[i], rail.cities[j]); if (!st) continue;
-      const pts = resamplePts(stepsPts(st), SPACING); pairs.push({ A: rail.cities[i], B: rail.cities[j], pts, L: (pts.length - 1) * SPACING });
+      const pts = resamplePts(relaxCurves(resamplePts(stepsPts(st), 0.004), 0.004, 0.06, 3000), SPACING); pairs.push({ A: rail.cities[i], B: rail.cities[j], pts, L: (pts.length - 1) * SPACING });
     }
     pairs.sort((a, b) => b.L - a.L);
     const useCount = new Map(), chosen = [];
@@ -1161,11 +1187,11 @@ function build() {
       for (const p of pairs) { if (chosen.length >= TRAIN_SPECS.length) break; if (chosen.includes(p)) continue; if ((useCount.get(p.A) || 0) >= lim || (useCount.get(p.B) || 0) >= lim) continue; if (p.L < 0.25) continue; chosen.push(p); useCount.set(p.A, (useCount.get(p.A) || 0) + 1); useCount.set(p.B, (useCount.get(p.B) || 0) + 1); }
     }
     chosen.forEach((p, ti) => {
-      const spec = TRAIN_SPECS[ti], g = new T.Group(), inner = makeTrain(trainBodies[ti % 4], carSets[ti % 4]);
-      inner.scale.setScalar(K * 1.05);
+      const spec = TRAIN_SPECS[ti], g = new T.Group(), units = makeTrain(trainBodies[ti % 4], carSets[ti % 4]);
+      units.forEach(u => { u.piv.scale.setScalar(K * 1.05); planetGroup.add(u.piv); });
       const hit = new T.Mesh(new T.SphereGeometry(0.04, 8, 6), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false })); hit.position.y = 0.02;
-      g.add(inner, hit); planetGroup.add(g);
-      const b = { spec, A: p.A, B: p.B, pts: p.pts, L: p.L, speed: 0.05 + ti * 0.004, off: ti * 23.7, g, n: new T.Vector3(), cur: {}, rail: true };
+      g.add(hit); planetGroup.add(g);
+      const b = { spec, A: p.A, B: p.B, pts: p.pts, L: p.L, speed: 0.05 + ti * 0.004, off: ti * 23.7, g, n: new T.Vector3(), cur: {}, rail: true, units };
       hit.userData = { kind: 'boat', ref: b }; pickables.push(hit);
       boats.push(b);
       // steam puffs
@@ -1202,10 +1228,32 @@ function build() {
   });
   const DOCK = 4;
   const _f = new T.Vector3(), _m = new T.Matrix4(), _z = new T.Vector3();
+  const _e = new T.Vector3();
   const sampleAt = (b, s, out) => {
-    const f = Math.min(b.pts.length - 1.001, Math.max(0, s / SPACING)), i = Math.floor(f);
+    const n = b.pts.length;
+    if (s < 0 || s > b.L) {   // beyond the ends: carry on along the straight great circle
+      const end = s < 0 ? 0 : n - 1, inner = s < 0 ? 1 : n - 2, d = (s < 0 ? -s : s - b.L);
+      out.copy(b.pts[end]); _e.copy(b.pts[end]).sub(b.pts[inner]); _e.addScaledVector(out, -_e.dot(out)).normalize();
+      return out.multiplyScalar(Math.cos(d)).addScaledVector(_e, Math.sin(d)).normalize();
+    }
+    const f = Math.min(n - 1.001, s / SPACING), i = Math.floor(f);
     return out.copy(b.pts[i]).lerp(b.pts[i + 1], f - i).normalize();
   };
+  const _uF = new T.Vector3(), _uR = new T.Vector3(), _uN = new T.Vector3(), _uH = new T.Vector3(), _uZ = new T.Vector3(), _uM = new T.Matrix4();
+  const SC = K * 1.05;
+  function placeTrain(b, s, leg) {
+    const dir = leg === 'out' ? 1 : -1;
+    for (const u of b.units) {
+      const sc = s + dir * u.cx * SC, h = u.half * SC * 0.8;     // front and rear axle positions on the track
+      sampleAt(b, sc + dir * h, _uF); sampleAt(b, sc - dir * h, _uR);
+      _uN.copy(_uF).add(_uR).normalize();
+      _uH.copy(_uF).sub(_uR); _uH.addScaledVector(_uN, -_uH.dot(_uN));
+      if (_uH.lengthSq() < 1e-14) continue; _uH.normalize();
+      _uM.makeBasis(_uH, _uN, _uZ.crossVectors(_uH, _uN).normalize());
+      u.piv.quaternion.setFromRotationMatrix(_uM);
+      u.piv.position.copy(_uN).multiplyScalar(1.0022);
+    }
+  }
   function updateBoat(b, t) {
     const T1 = b.L / b.speed, cyc = 2 * (T1 + DOCK), p = (t + b.off) % cyc;
     let s, leg, docked = false;
@@ -1220,7 +1268,7 @@ function build() {
     _f.normalize();
     _m.makeBasis(_f, b.n, _z.crossVectors(_f, b.n).normalize());
     b.g.quaternion.setFromRotationMatrix(_m);
-    if (b.rail) b.g.position.copy(b.n).multiplyScalar(1.0022);
+    if (b.rail) { b.g.position.copy(b.n).multiplyScalar(1.0022); placeTrain(b, s, leg); }
     else { b.g.position.copy(b.n).multiplyScalar(1.003 + Math.sin(t * 2 + b.off) * 0.0015); b.g.rotateZ(Math.sin(t * 1.7 + b.off) * 0.07); }
     const prog = leg === 'out' ? s / b.L : 1 - s / b.L;
     Object.assign(b.cur, { s, leg, docked, prog, eta: (leg === 'out' ? b.L - s : s) / b.speed, idx: Math.floor(s / SPACING) });
