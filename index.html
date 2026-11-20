@@ -88,6 +88,7 @@
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script src="planet-gen.js"></script>
+<script src="city-gen.js"></script>
 <script>
 (function () {
 'use strict';
@@ -124,7 +125,7 @@ const renderer = new T.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setClearColor(0x000005);
 const scene = new T.Scene();
-const camera = new T.PerspectiveCamera(42, 1, 0.05, 400);
+const camera = new T.PerspectiveCamera(42, 1, 0.004, 400);
 camera.position.set(0.9, 0.7, 3.3);
 scene.add(camera);
 
@@ -137,7 +138,7 @@ const controls = new T.OrbitControls(camera, canvas);
 controls.enablePan = false;
 controls.enableDamping = true;
 controls.dampingFactor = 0.07;
-controls.minDistance = 1.25;
+controls.minDistance = 1.06;
 controls.maxDistance = 6;
 controls.autoRotate = true;
 controls.autoRotateSpeed = 0.6;
@@ -446,7 +447,7 @@ function build() {
       if (m > bd) { bd = m; best = c; }
     }
     taken.push(best.n);
-    cities.push({ name: CITY_INFO[i][0], info: CITY_INFO[i][1], n: best.n, biome: best.b });
+    cities.push({ name: CITY_INFO[i][0], info: CITY_INFO[i][1], n: best.n, biome: best.b, Ru: 7.4 + ((i * 7) % 5) * 0.5 });
   }
 
   /* ---------- land grid (shared by the railway and the ships) ---------- */
@@ -538,7 +539,7 @@ function build() {
         for (let i = 0; i < pts.length - 1; i++) for (let k = 0; k < 4; k++) { const q = pts[i].clone().lerp(pts[i + 1], k / 4).normalize(); if (!P.isLand([q.x, q.y, q.z]) || Math.abs(q.y) > 0.76) return false; }
         return true;
       };
-      const CITY_R = 0.036 * RK;
+      const CITY_R = 0.05 * RK;
       for (const L of links) {
         const A = rc[L.i], B = rc[L.j], cells = []; for (let k = B.k; k !== -1; k = A.dj.prev[k]) cells.push(k); cells.reverse();
         const base = [A.c.n.clone(), ...cells.map(k => new T.Vector3(gDir[k * 3], gDir[k * 3 + 1], gDir[k * 3 + 2])), B.c.n.clone()];
@@ -560,7 +561,7 @@ function build() {
           r = relaxCurves(r, 0.004, 0.085 * RK, 4000, okFor(0.004));
           r = relaxCurves(r, 0.004, 0.075 * RK, 6000, okFor(0.014));      // stubborn bends: allow a little more beach
         }   // no tight bends for the big trains
-        r = r.filter(p => angle(p, A.c.n) > CITY_R && angle(p, B.c.n) > CITY_R);          // stop at the edge of each town square
+        r = r.filter(p => angle(p, A.c.n) > CITY_R * A.c.Ru / 8 && angle(p, B.c.n) > CITY_R * B.c.Ru / 8);          // stop at the edge of each town square
         if (r.length < 6) continue;
         rail.edges.push({ a: A.c, b: B.c, pts: r });
         for (let i = 0; i < r.length; i += 2) rail.samples.push(r[i]);
@@ -608,7 +609,7 @@ function build() {
   for (const c of sortedCand) {
     if (mtnN.length >= 320) break;
     if (angle(c.n, fugi.n) < 0.18 || angle(c.n, fug2.n) < 0.12 || angle(c.n, nug.n) < 0.1 || nearRail(c.n, 0.03)) continue;
-    if (cities.some(k => angle(c.n, k.n) < 0.057)) continue;
+    if (cities.some(k => angle(c.n, k.n) < k.Ru * 0.025 * K + 0.02)) continue;
     if (mtnN.some(m => angle(c.n, m) < 0.043 * RK)) continue;
     mtnN.push(c.n);
     const cluster = 1 + Math.floor(rng() * 3);
@@ -626,58 +627,49 @@ function build() {
   }
   mtnBake.finish(planetGroup);
 
-  /* cities: little walled towns with houses, doors, windows, chimneys, a tower and a flag */
-  const houseCols = [0xff6b6b, 0xffd23f, 0x4ecdc4, 0xff9ff3, 0x9b7bff, 0xff9f43, 0x7ed957, 0xff7aa8];
-  const roofCols = [0xb04a3a, 0x8a3a52, 0x3a6aa0, 0x7a4a2a];
-  const dark = new T.Color(0x5a3420), glowC = 0xfff1a8;
-  function makeHouse(color, roofColor, tall, round) {
-    const h = new T.Group(), bh = 0.016 + tall * 0.007;
-    if (round) {
-      h.add(withInk(new T.Mesh(new T.CylinderGeometry(0.0105, 0.0112, bh, 14).translate(0, bh / 2, 0), toon(color)), 1.16));
-      h.add(withInk(new T.Mesh(new T.ConeGeometry(0.0145, 0.017, 14).translate(0, bh + 0.0085, 0), toon(roofColor)), 1.16));
-      h.add(new T.Mesh(new T.BoxGeometry(0.0045, 0.0078, 0.0012).translate(0, 0.0039, 0.0108), toon(0x5a3420)));
-      h.add(new T.Mesh(new T.BoxGeometry(0.0036, 0.0036, 0.0012).translate(-0.0052, bh * 0.62, 0.0092).rotateY(-0.5), toon(glowC)));
-      h.add(new T.Mesh(new T.BoxGeometry(0.0036, 0.0036, 0.0012).translate(0.0052, bh * 0.62, 0.0092).rotateY(0.5), toon(glowC)));
-      h.add(new T.Mesh(new T.SphereGeometry(0.0022, 8, 6).translate(0, bh + 0.0185, 0), toon(0xffd23f)));
-      return h;
-    }
-    h.add(withInk(new T.Mesh(new T.BoxGeometry(0.02, bh, 0.02).translate(0, bh / 2, 0), toon(color)), 1.16));
-    h.add(withInk(new T.Mesh(new T.ConeGeometry(0.0195, 0.015, 4).rotateY(Math.PI / 4).translate(0, bh + 0.0075, 0), toon(roofColor)), 1.16));
-    h.add(new T.Mesh(new T.BoxGeometry(0.0045, 0.0078, 0.0012).translate(0, 0.0039, 0.0102), toon(0x5a3420)));
-    h.add(new T.Mesh(new T.BoxGeometry(0.0036, 0.0036, 0.0012).translate(-0.0062, bh * 0.62, 0.0102), toon(glowC)));
-    h.add(new T.Mesh(new T.BoxGeometry(0.0036, 0.0036, 0.0012).translate(0.0062, bh * 0.62, 0.0102), toon(glowC)));
-    h.add(new T.Mesh(new T.BoxGeometry(0.0012, 0.0036, 0.0036).translate(0.0102, bh * 0.62, 0), toon(glowC)));
-    h.add(new T.Mesh(new T.BoxGeometry(0.0032, 0.009, 0.0032).translate(0.0065, bh + 0.011, -0.003), toon(0x7a5a52)));
-    return h;
-  }
-  const cityBake = makeBaker();
-  cities.forEach((c, idx) => {
-    const g = new T.Group();
-    g.add(withInk(new T.Mesh(new T.CylinderGeometry(0.052, 0.055, 0.004, 28).translate(0, 0.002, 0), toon(0xe9e2c8)), 1.05));
-    const spots = [[0, 0, 1.4, 1], [0.026, 0.009, 1, 0], [-0.024, 0.013, 1, 1], [0.006, -0.028, 0.95, 0], [-0.013, 0.032, 0.85, 0], [0.032, -0.02, 0.8, 1], [-0.03, -0.018, 0.85, 0]];
-    spots.forEach((s, i) => {
-      const h = makeHouse(houseCols[(idx * 3 + i) % 8], roofCols[(idx + i) % 4], s[3], (i + idx) % 3 === 1);
-      if (i === 0) { // tower with battlements and a flag
-        const tw = withInk(new T.Mesh(new T.CylinderGeometry(0.0066, 0.0088, 0.034, 14).translate(0, 0.034, 0), toon(0xfff2cc)), 1.16);
-        const band = withInk(new T.Mesh(new T.CylinderGeometry(0.0098, 0.0098, 0.004, 14).translate(0, 0.053, 0), toon(0xe6d3a1)), 1.14);
-        const tr = withInk(new T.Mesh(new T.ConeGeometry(0.0115, 0.018, 14).translate(0, 0.064, 0), toon(0x7b5cff)), 1.16);
-        const pole = new T.Mesh(new T.CylinderGeometry(0.0006, 0.0006, 0.012, 5).translate(0, 0.082, 0), toon(0x3a2a20));
-        const flag = new T.Mesh(new T.BoxGeometry(0.008, 0.0045, 0.0008).translate(0.0045, 0.0855, 0), toon(0xff4d6d));
-        h.add(tw, band, tr, pole, flag);
+  /* ---------- towns: each with its own personality (see city-gen.js) ---------- */
+  const TOWN_S = 0.025 * K;                       // world size of one town unit (one small house)
+  cities.forEach(c => { c.Rw = c.Ru * TOWN_S; });
+  const townGroup = new T.Group(); planetGroup.add(townGroup);
+  const townSmoke = [];
+  {
+    const STY = CityGen.STYLES, order = ['walled', 'castle', 'cathedral', 'market', 'windmills', 'factory', 'walled', 'castle', 'cathedral', 'market', 'factory', 'windmills'];
+    let oi = 0;
+    cities.forEach((c, idx) => {
+      const n = c.n, uu = new T.Vector3().crossVectors(n, Math.abs(n.y) > 0.95 ? new T.Vector3(1, 0, 0) : UP).normalize(), ww = new T.Vector3().crossVectors(uu, n);
+      const rot = rng() * 6.28, ua = uu.clone().multiplyScalar(Math.cos(rot)).addScaledVector(ww, Math.sin(rot)), wa = new T.Vector3().crossVectors(ua, n);
+      const root = new T.Matrix4().makeBasis(ua.clone().multiplyScalar(TOWN_S), n.clone().multiplyScalar(TOWN_S), wa.clone().multiplyScalar(TOWN_S)).setPosition(n);
+      const inv = new T.Matrix4().makeBasis(ua, n, wa).invert(), toLocal = v => { const q = v.clone().sub(n).applyMatrix4(inv); return [q.x / TOWN_S, q.z / TOWN_S]; };
+      const wv = new T.Vector3(), land = (x, z) => { wv.set(x, 0, z).applyMatrix4(root).normalize(); return P.isLand([wv.x, wv.y, wv.z]); };
+      // which way is the sea (for harbour towns)
+      let seaDir = null;
+      for (let k = 0; k < 24 && seaDir === null; k++) for (const r of [c.Ru * 0.9, c.Ru * 1.3]) { const a = k / 24 * 6.28; if (!land(Math.sin(a) * r, Math.cos(a) * r)) { seaDir = a; break; } }
+      // railway inside the town, and a station where each line ends
+      const railLocal = [], station = [];
+      for (const e of rail.edges) for (const [end, pts] of [[e.a, e.pts], [e.b, e.pts.slice().reverse()]]) {
+        if (end !== c) continue;
+        const loc = pts.slice(0, 60).map(toLocal).filter(q => Math.hypot(q[0], q[1]) < c.Ru * 1.3);
+        railLocal.push(...loc);
+        if (loc.length > 2) { const a = loc[0], b = loc[2]; station.push([a[0], a[1], Math.atan2(b[0] - a[0], b[1] - a[1])]); }
       }
-      h.position.set(s[0], 0.004, s[1]); h.scale.setScalar(s[2]); h.rotation.y = (i * 1.7 + idx) % 6.28;
-      g.add(h);
+      let style;
+      if (c.biome === 'desert') style = idx % 2 ? 'palace' : 'market';
+      else if (seaDir !== null && idx % 3 === 0) style = 'harbour';
+      else style = order[oi++ % order.length];
+      c.style = style;
+      const res = CityGen.build(T, { root, sagK: TOWN_S / 2, R: c.Ru, biome: c.biome === 'ice' ? 'green' : c.biome, style, seed: 9173 + idx * 7919, land, rail: railLocal, station, seaDir: seaDir === null ? 0 : seaDir,
+        flag: [0xff4d6d, 0xffd23f, 0x4ecdc4, 0x9b7bff][idx % 4], flag2: [0x3d6fa8, 0x8a3a52, 0x2f8a4a][idx % 3] });
+      const m = new T.Mesh(res.geo, toon(0xffffff, { vertexColors: true })), mi = new T.Mesh(res.ink, inkMat);
+      const mg = new T.Mesh(res.ground, new T.MeshLambertMaterial({ vertexColors: true, transparent: true, depthWrite: false })); mg.renderOrder = 2;
+      townGroup.add(mg, m, mi); c.houses = res.houses;
+      for (const sp of res.smoke) townSmoke.push(new T.Vector3(sp[0], sp[1], sp[2]).applyMatrix4(root));
+      const hit = new T.Mesh(new T.SphereGeometry(c.Rw * 0.8, 8, 6), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+      hit.position.copy(c.n).multiplyScalar(1.005);
+      hit.userData = { kind: 'city', ref: c };
+      planetGroup.add(hit); pickables.push(hit);
+      addLabel(c.name, c.n, 1.0 + c.Rw * 0.55, '', () => select('city', c));
     });
-    g.scale.setScalar(1.5 * K);
-    placeOnSurface(g, c.n, 0.997, rng() * 6);
-    cityBake.add(g);
-    const hit = new T.Mesh(new T.SphereGeometry(0.04, 8, 6), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
-    hit.position.copy(c.n).multiplyScalar(1.02);
-    hit.userData = { kind: 'city', ref: c };
-    planetGroup.add(hit); pickables.push(hit);
-    addLabel(c.name, c.n, 1.06, '', () => select('city', c));
-  });
-  cityBake.finish(planetGroup);
+  }
 
   /* trees, bushes and cacti: instanced */
   {
@@ -697,7 +689,7 @@ function build() {
       const n = v3(d);
       if (!nearLand(d, 0.008)) continue;
       if (angle(n, fugi.n) < 0.09 || angle(n, fug2.n) < 0.04 || angle(n, nug.n) < 0.065 || nearRail(n, 0.012)) continue;
-      if (cities.some(k => angle(n, k.n) < 0.03) || mtnN.some(m => angle(n, m) < 0.023)) continue;
+      if (cities.some(k => angle(n, k.n) < k.Ru * 0.025 * K * 1.08) || mtnN.some(m => angle(n, m) < 0.023)) continue;
       const kind = b === 'desert' ? 'cact' : b === 'savanna' ? (rng() < 0.6 ? 'round' : 'cact') : (Math.abs(d[1]) > 0.62 || rng() < 0.4) ? 'pine' : 'round';
       list[kind].push({ n, b });
     }
@@ -1484,8 +1476,8 @@ function build() {
       const wr = new T.Mesh(new T.PlaneGeometry(0.026, 0.012).translate(0.013, 0, 0), birdMat);
       wl.rotation.x = wr.rotation.x = -Math.PI / 2;
       const body = new T.Mesh(new T.SphereGeometry(0.006, 6, 4), new T.MeshBasicMaterial({ color: 0xffe8a8 }));
-      g.add(wl, wr, body); g.scale.setScalar(K * 1.1); planetGroup.add(g);
-      birds.push({ g, wl, wr, c, u, w, ph: i * 0.5 + ci, rad: (0.1 + i * 0.012) * K * 1.2, sp: 0.35 + (ci % 4) * 0.05, h: 1.045 + i * 0.008 });
+      g.add(wl, wr, body); g.scale.setScalar(K * 0.38); planetGroup.add(g);
+      birds.push({ g, wl, wr, c, u, w, ph: i * 0.5 + ci, rad: (0.1 + i * 0.012) * K * 1.2, sp: 0.35 + (ci % 4) * 0.05, h: 1.058 + i * 0.006 });
     }
   });
   const _p = new T.Vector3(), _p2 = new T.Vector3(), _ff = new T.Vector3(), _rr = new T.Vector3();
@@ -1579,7 +1571,7 @@ function build() {
     window.__tiles = tiles;
   } catch (e) { console.warn('detail tiles unavailable', e); }
   world = { P, cities, volcanoes, storms, boats, selectBoat, clearBoat, boatSelected: () => !!sel };
-  if (new URLSearchParams(location.search).has('debug')) window.__np = { camera, controls, scene, planetGroup, boats, storms, volcanoes, cities, rail };
+  if (new URLSearchParams(location.search).has('debug')) window.__np = { camera, controls, scene, planetGroup, boats, storms, volcanoes, cities, rail, T, tilted: () => tiltedMat };
   const q = new URLSearchParams(location.search).get('go');   // e.g. ?go=volcano | volcano2 | storm | storm2 | city3 | boat2
   if (q) setTimeout(() => { window.__noSpin = true;
     if (q.startsWith('boat')) { const b = boats[+q.slice(4)]; selectBoat(b); camera.position.copy(b.n).multiplyScalar(+(new URLSearchParams(location.search).get('d') || 1.7)); controls.update(); if (focus) focus.ease = 0; return; }
@@ -1627,7 +1619,7 @@ function select(kind, c) {
   let n, dist = 1.6;
   if (kind === 'boat') { world.selectBoat(c); return; }
   world.clearBoat(false); delete card.dataset.boat;
-  if (kind === 'city') { n = c.n; showCard(c.name, c.info); }
+  if (kind === 'city') { n = c.n; dist = 1.28; showCard(c.name, c.info); }
   else if (kind === 'volcano') { n = c.n; dist = 1.6; c.erupt(); showCard(c.name, VOLCANO_LINES[world.volcanoes.indexOf(c)][lineI++ % 3]); }
   else if (kind === 'storm') { n = c.n; dist = 2.0; c.zap(); showCard(c.name, c.lines[c.li++ % c.lines.length]); }
   setFocus(n, dist);
@@ -1708,7 +1700,7 @@ function frame(now) {
   starMat.uniforms.time.value = time;
   stepFocus(dt);
   controls.autoRotate = !focus && !window.__noSpin;
-  controls.rotateSpeed = 0.25 + (camera.position.length() - 1.5) * 0.18;
+  { const dd = camera.position.length(); controls.rotateSpeed = Math.max(0.03, 0.25 + (dd - 1.5) * 0.18) * Math.min(1, (dd - 1) / 0.45); controls.zoomSpeed = Math.max(0.12, 2.4 * (dd - 1) / dd); }
   controls.update();
   baseCam.copy(camera.position); baseQuat.copy(camera.quaternion);
   applyTilt(); camera.updateMatrixWorld(); tiltedMat.copy(camera.matrixWorld);   // the tilted pose is only for drawing, labels and picking
@@ -1728,7 +1720,7 @@ requestAnimationFrame(() => setTimeout(() => {
 <script>
 /* ---------- update checker: looks every 10 minutes, jiggles the button when a new version is out ---------- */
 (() => {
-  const FILES = ['index.html', 'planet-gen.js', 'planet-worker.js', 'planet-tile.js', 'planet-tile-worker.js', 'manifest.webmanifest'];
+  const FILES = ['index.html', 'planet-gen.js', 'planet-worker.js', 'planet-tile.js', 'planet-tile-worker.js', 'city-gen.js', 'manifest.webmanifest'];
   const btn = document.getElementById('updBtn'), msg = document.getElementById('updMsg');
   let base = null, avail = false, busy = false, lastCheck = 0, msgT = 0;
   const hash = t => { let h = 2166136261; for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36) + '.' + t.length; };
