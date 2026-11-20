@@ -90,12 +90,14 @@
 <div id="places"></div>
 <div id="card"><button id="cardX" aria-label="close">×</button><h2></h2><p></p></div>
 <div id="ageMsg"></div>
+<button id="alienBtn" aria-label="Alien invasion" title="Alien invasion"><svg viewBox="0 0 60 54"><path d="M30 3 L57 50 H3 Z" fill="#e01b1b" stroke="#fff" stroke-width="4" stroke-linejoin="round"/><path d="M30 12 L50 46 H10 Z" fill="#ffd400"/><ellipse cx="30" cy="34" rx="8" ry="9" fill="#3fa82f"/><ellipse cx="30" cy="31" rx="4.5" ry="4" fill="#fff"/><circle cx="30" cy="31" r="2" fill="#111"/><path d="M24 40 q-3 5 -6 4 M36 40 q3 5 6 4 M30 42 v5" stroke="#3fa82f" stroke-width="2" fill="none" stroke-linecap="round"/></svg><span>Alien invasion</span></button>
 <div id="loading">Making a planet…</div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script src="planet-gen.js"></script>
 <script src="city-gen.js"></script>
+<script src="invasion.js"></script>
 <script>
 (function () {
 'use strict';
@@ -1873,6 +1875,13 @@ function build() {
   }
   const AGES = [['stone', '🪨 Stone Age'], ['steam', '🚂 Steam Age'], ['modern', '🏙️ Modern Age'], ['space', '🚀 Space Age']];
 
+  /* ---------- the alien invasion (space age only, see invasion.js) ---------- */
+  const invCtx = { T, scene, planetGroup, camera, renderer, canvas, cities, nugget: volcanoes.find(v => v.api), tickers, toon, withInk, inkMat, partShader, placeOnSurface, TOWN_S, K,
+    setFocus: (n, d) => setFocus(n, d), releaseFocus: () => releaseFocus(), onEnd: () => { invasion = null; } };
+  let invasion = null;
+  const startInvasion = () => { if (!invasion && AGE === 'space') invasion = NPInvasion.start(invCtx); };
+  document.getElementById('alienBtn').onclick = () => { if (AGE === 'space' && !invasion) NPInvasion.confirm(startInvasion); };
+
   /* UI lists: a city button and a wonder button, each opening its own list */
   const list = document.getElementById('places'), cityBtn = document.getElementById('cityBtn'), wonderBtn = document.getElementById('wonderBtn');
   const LISTS = {
@@ -1949,7 +1958,7 @@ function build() {
     window.__tiles = tiles;
   } catch (e) { console.warn('detail tiles unavailable', e); }
   world = { P, cities, volcanoes, storms, boats, selectBoat, clearBoat, boatSelected: () => !!sel };
-  if (new URLSearchParams(location.search).has('debug')) window.__np = { setAge: a => setAge(a), launch, satellites, countries, camera, controls, scene, planetGroup, boats, storms, volcanoes, cities, rail, T, tilted: () => tiltedMat };
+  if (new URLSearchParams(location.search).has('debug')) window.__np = { invade: () => { startInvasion(); return invasion; }, setAge: a => setAge(a), launch, satellites, countries, camera, controls, scene, planetGroup, boats, storms, volcanoes, cities, rail, T, tilted: () => tiltedMat };
   const q = new URLSearchParams(location.search).get('go');   // e.g. ?go=volcano | volcano2 | storm | storm2 | city3 | boat2
   if (q) setTimeout(() => { window.__noSpin = true;
     if (q.startsWith('boat')) { const b = boats[+q.slice(4)]; selectBoat(b); camera.position.copy(b.n).multiplyScalar(+(new URLSearchParams(location.search).get('d') || 1.7)); controls.update(); if (focus) focus.ease = 0; return; }
@@ -2100,7 +2109,7 @@ requestAnimationFrame(() => setTimeout(() => {
 <script>
 /* ---------- update checker: looks every 10 minutes, jiggles the button when a new version is out ---------- */
 (() => {
-  const FILES = ['index.html', 'planet-gen.js', 'planet-worker.js', 'planet-tile.js', 'planet-tile-worker.js', 'city-gen.js', 'manifest.webmanifest'];
+  const FILES = ['index.html', 'planet-gen.js', 'planet-worker.js', 'planet-tile.js', 'planet-tile-worker.js', 'city-gen.js', 'invasion.js', 'manifest.webmanifest'];
   const btn = document.getElementById('updBtn'), msg = document.getElementById('updMsg');
   let base = null, avail = false, busy = false, lastCheck = 0, msgT = 0;
   const hash = t => { let h = 2166136261; for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36) + '.' + t.length; };
