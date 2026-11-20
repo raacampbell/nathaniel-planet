@@ -1875,7 +1875,7 @@ function build() {
   const list = document.getElementById('places'), cityBtn = document.getElementById('cityBtn'), wonderBtn = document.getElementById('wonderBtn');
   const LISTS = {
     city: { btn: cityBtn, title: 'Cities', items: cities.map(c => [c.name, () => select('city', c)]) },
-    wonder: { btn: wonderBtn, title: 'Wonders', items: [...volcanoes.map(v => [v.name, () => select('volcano', v)]), ...storms.map(s2 => [s2.name, () => select('storm', s2)])] },
+    wonder: { btn: wonderBtn, title: 'Wonders', get items() { return [...volcanoes.map(v => [v.name, () => select('volcano', v)]), ...storms.map(s2 => [s2.name, () => select('storm', s2)]), ...(AGE === 'space' ? [...(launch.n ? [['🚀 ' + launch.name, () => select('launch', launch)]] : []), ['🛰️ ' + station.name, () => select('station', station)]] : [])]; } },
     age: { btn: document.getElementById('ageBtn'), title: 'Travel in time', get items() { return AGES.map(([k, t]) => [(k === AGE ? '✓ ' : '') + t, () => setAge(k)]); } },
   };
   let openList = null;
