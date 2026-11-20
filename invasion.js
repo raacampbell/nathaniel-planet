@@ -382,7 +382,12 @@ body.invading #invAlert{opacity:1}
           s.pos.lerp(saucerHome(s, invT).multiplyScalar(s.alt + 0.004 * Math.sin(invT * 2 + s.id)), 1 - Math.exp(-dt * 1.5));
           if (s.role === 'attack') {
             s.fire -= dt;
-            if (s.fire <= 0 && phase !== 'retreat') { s.fire = R(0.5, 1.4); const p = cityTarget(s.tgt); _a.copy(s.pos).addScaledVector(s.pos.clone().normalize(), -0.006); beam(_a, p, 0x3cff6a, 0.0024, 0.35); explode(p, 0.5, false); if (Math.random() < 0.55) addFire(p, R(25, 60), R(0.6, 1.2)); }
+            if (s.fire <= 0 && phase !== 'retreat') {
+              s.fire = R(0.5, 1.4); const p = cityTarget(s.tgt); _a.copy(s.pos).addScaledVector(s.pos.clone().normalize(), -0.006);
+              beam(_a, p, 0xff1a1a, 0.0044, 0.4); explode(p, 0.5, false);
+              if (Math.random() < 0.85) addFire(p, R(30, 70), R(0.7, 1.4));
+              if (!s.tgt._ignited) { s.tgt._ignited = true; for (let k = 0; k < 3; k++) addFire(cityTarget(s.tgt), R(45, 95), R(0.6, 1.3)); }
+            }
           } else if (s.role === 'bbq') {
             s.fire -= dt;
             if (s.fire <= 0 && phase !== 'retreat') { s.fire = R(0.15, 0.35); const p = offset(nug.n, Math.random() * 6.28, Math.random() * 0.03); beam(_a.copy(s.pos).addScaledVector(s.pos.clone().normalize(), -0.006), p, 0xff8a1a, 0.003, 0.25); if (Math.random() < 0.25) explode(p, 0.35, false); if (Math.random() < 0.08) addFire(p, R(20, 40), 0.8); note(p, 1); }
