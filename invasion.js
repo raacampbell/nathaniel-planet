@@ -354,10 +354,8 @@ body.invading #invAlert{opacity:1}
       [140, () => { spawnAliens(3); launchJets(3); }], [146, () => spawnSaucer('attack')], [150, () => spawnSaucer('attack')],
       [152, () => caption('The jets are winning! Saucers are falling out of the sky!', true)],
       [168, () => { phase = 'retreat'; caption('The aliens are running away!! 🏃‍♂️👽', true); for (const A of aliens) { A.state = 'run'; A.speed *= 2.2; } }],
-      [192, () => { for (const s of saucers) if (s.state !== 'gone' && s.state !== 'crash') { s.state = 'flee'; s.t = 0; } }],
-      [200, () => victory()],
     ];
-    let si = 0, phase = 'attack', done = false, aliensDefeated = false;
+    let si = 0, phase = 'attack', done = false, aliensDefeated = false, victoryT = Infinity;
 
     /* ---------- the main loop ---------- */
     let lastInput = performance.now(), autoT = 0;
@@ -408,7 +406,6 @@ body.invading #invAlert{opacity:1}
         } else if (s.state === 'landed') {
           s.pos.copy(s.ground).multiplyScalar(1.006);
           s.beam.visible = false;
-          if (phase === 'retreat' && aliens.every(A => A.state === 'home')) { s.state = 'flee'; s.t = 0; landed = null; caption('The last saucer is escaping! Bye bye, aliens! 👋', true); }
         } else if (s.state === 'crash') {
           s.vel.addScaledVector(s.pos.clone().normalize(), -0.06 * dt); s.pos.addScaledVector(s.vel, dt); s.body.rotation.z = Math.sin(s.t * 3) * 0.6;
           if (Math.random() < dt * 30) smokeP.emit(s.pos, rv(0.01), R(1, 2), 0.006, 0.02, [0.2, 0.2, 0.2], [0.5, 0.5, 0.5], 0.8);
@@ -439,7 +436,13 @@ body.invading #invAlert{opacity:1}
         }
         if (A.state !== 'home') { A.g.position.copy(A.pos); if (A.state !== 'walk' && A.state !== 'run') { _b.copy(nug.n).sub(A.pos); orient(A.g, A.pos.clone().normalize(), _b); } }
       }
-      if (!aliensDefeated && phase === 'retreat' && aliens.length && aliens.every(A => A.state === 'home')) { aliensDefeated = true; for (const J of jets) J.leaving = true; }
+      if (!aliensDefeated && phase === 'retreat' && aliens.length && aliens.every(A => A.state === 'home')) {
+        aliensDefeated = true; for (const J of jets) J.leaving = true;
+        landed = null; caption('The last saucer is escaping! Bye bye, aliens! 👋', true);
+        for (const s of saucers) if (s.state !== 'gone' && s.state !== 'crash') { s.state = 'flee'; s.t = 0; }
+        victoryT = 3.5;
+      }
+      if (victoryT !== Infinity) { victoryT -= dt; if (victoryT <= 0) { victoryT = Infinity; victory(); } }
       // jets
       for (const J of jets) {
         if (J.leaving) {
