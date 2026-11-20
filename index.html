@@ -1510,6 +1510,26 @@ function build() {
   volcanoes.forEach(v => mk(v.name, () => select('volcano', v)));
   storms.forEach(s => mk(s.name, () => select('storm', s)));
 
+
+  /* PROTOTYPE (?patch): lays a pre-rendered high-detail ground tile over the planet so we can judge the look */
+  if (new URLSearchParams(location.search).has('patch')) {
+    fetch('proto/patch.json').then(r => r.json()).then(info => {
+      const nz = v => v.clone().normalize();
+      const n = new T.Vector3(...info.n), uu = nz(new T.Vector3().crossVectors(n, UP)), ww = new T.Vector3().crossVectors(n, uu), Hh = Math.tan(info.span / 2);
+      const M = 64, pos = [], uv = [], idx = [];
+      for (let j = 0; j <= M; j++) for (let i = 0; i <= M; i++) {
+        const a = i / M * 2 - 1, b = j / M * 2 - 1, d = nz(n.clone().addScaledVector(uu, a * Hh).addScaledVector(ww, b * Hh));
+        pos.push(d.x * 1.0004, d.y * 1.0004, d.z * 1.0004); uv.push(i / M, 1 - j / M);
+      }
+      for (let j = 0; j < M; j++) for (let i = 0; i < M; i++) { const a = j * (M + 1) + i; idx.push(a, a + 1, a + M + 1, a + 1, a + M + 2, a + M + 1); }
+      const g = new T.BufferGeometry(); g.setAttribute('position', new T.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new T.Float32BufferAttribute(uv, 2)); g.setIndex(idx); g.computeVertexNormals();
+      new T.TextureLoader().load('proto/patch.png', tex => {
+        tex.anisotropy = renderer.capabilities.getMaxAnisotropy(); tex.minFilter = T.LinearMipmapLinearFilter;
+        const m = new T.Mesh(g, new T.MeshLambertMaterial({ map: tex, transparent: true, depthWrite: false }));
+        m.renderOrder = 1; planetGroup.add(m); window.__patch = m;
+      });
+    });
+  }
   world = { P, cities, volcanoes, storms, boats, selectBoat, clearBoat, boatSelected: () => !!sel };
   if (new URLSearchParams(location.search).has('debug')) window.__np = { camera, controls, scene, planetGroup, boats, storms, volcanoes, cities, rail };
   const q = new URLSearchParams(location.search).get('go');   // e.g. ?go=volcano | volcano2 | storm | storm2 | city3 | boat2

@@ -250,7 +250,7 @@
 
     return {
       seed, sea, lowest, highest,
-      heightAt, biomeAt, dirFromUV, buildTexture, randomDir, seaDepth01,
+      heightAt, biomeAt, dirFromUV, buildTexture, randomDir, seaDepth01, iceEdge, desertEdge,
       isLand(d) { return heightAt(d[0], d[1], d[2]) > sea; },
       relHeight(d) { return clamp01((heightAt(d[0], d[1], d[2]) - sea) / (highest - sea)); },
       depth(d) { return seaDepth01(heightAt(d[0], d[1], d[2])); },
@@ -258,7 +258,7 @@
     };
   }
 
-  const api = { createPlanet, mulberry32 };
+  const api = { createPlanet, mulberry32, makeNoise };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.PlanetGen = api;
 })(typeof window !== 'undefined' ? window : globalThis);
