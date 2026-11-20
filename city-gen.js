@@ -30,10 +30,10 @@
     const cyl = n => pack(keep(new T.CylinderGeometry(0.5, 0.5, 1, n, 1, true).translate(0, 0.5, 0)));
     const cylC = n => pack(keep(new T.CylinderGeometry(0.5, 0.5, 1, n).translate(0, 0.5, 0)));
     const cone = n => pack(keep(new T.ConeGeometry(0.5, 1, n, 1, true).translate(0, 0.5, 0)));
-    const dome = pack(keep(new T.SphereGeometry(0.5, 14, 7, 0, Math.PI * 2, 0, Math.PI / 2)));
-    const ball = pack(keep(new T.SphereGeometry(0.5, 10, 7)));
+    const dome = pack(keep(new T.SphereGeometry(0.5, 12, 5, 0, Math.PI * 2, 0, Math.PI / 2)));
+    const ball = pack(keep(new T.SphereGeometry(0.5, 8, 5))), sball = pack(keep(new T.SphereGeometry(0.5, 5, 3)));
     const disc = pack(keep(new T.CircleGeometry(0.5, 20).rotateX(-Math.PI / 2)));
-    PRIM = { BOX, GABLE, HIP, QUAD, CYL8: cylC(8), CYL12: cylC(12), CYL16: cylC(16), TUBE16: cyl(16), CONE4: cone(4), CONE8: cone(8), CONE12: cone(12), CONE16: cone(16), DOME: dome, BALL: ball, DISC: disc };
+    PRIM = { BOX, GABLE, HIP, QUAD, CYL8: cylC(8), CYL12: cylC(12), CYL16: cylC(16), TUBE16: cyl(16), CONE4: cone(4), CONE8: cone(8), CONE12: cone(12), CONE16: cone(16), DOME: dome, BALL: ball, SBALL: sball, DISC: disc };
     return PRIM;
   }
 
@@ -161,7 +161,7 @@
     const P = PRIM, y = W.sag(x, z), r = o.r;
     W.put(P.CYL16, x, y - 0.2, z, r * 2, 0.95, r * 2, 0, o.wall, 0.04);
     W.put(P.CONE16, x, y + 0.72, z, r * 2.6, 0.95, r * 2.6, 0, o.roof, 0.045);
-    W.put(P.BALL, x, y + 1.6, z, 0.14, 0.14, 0.14, 0, 0x8a5a2a);
+    W.put(P.SBALL, x, y + 1.6, z, 0.14, 0.14, 0.14, 0, 0x8a5a2a);
     const a = rnd() * 6.28;
     W.put(P.QUAD, x + Math.sin(a) * (r + 0.015), y + 0.3, z + Math.cos(a) * (r + 0.015), 0.24, 0.45, 1, a, DOOR);
     for (const k of [1.6, -1.6]) W.put(P.QUAD, x + Math.sin(a + k) * (r + 0.015), y + 0.45, z + Math.cos(a + k) * (r + 0.015), 0.18, 0.18, 1, a + k, GLOW);
@@ -210,7 +210,7 @@
       for (const s of [-1, 1]) {
         f(P.BOX, s * Wd * 0.42, 0, L / 2 - 0.3, 0.85 * k, H * 2.1, 0.85 * k, 0, wall, 0.05);
         f(P.CONE8, s * Wd * 0.42, H * 2.1, L / 2 - 0.3, 0.95 * k, 2.4 * k, 0.95 * k, Math.PI / 8, roof, 0.05);
-        f(P.BALL, s * Wd * 0.42, H * 2.1 + 2.45 * k, L / 2 - 0.3, 0.14, 0.14, 0.14, 0, 0xffd23f);
+        f(P.SBALL, s * Wd * 0.42, H * 2.1 + 2.45 * k, L / 2 - 0.3, 0.14, 0.14, 0.14, 0, 0xffd23f);
         for (let fl = 0; fl < 3; fl++) f(P.QUAD, s * Wd * 0.42, H * (0.5 + fl * 0.55), L / 2 - 0.3 + 0.44 * k, 0.22, 0.42, 1, 0, 0x2a2440);
       }
       f(P.DISC, 0, H * 1.25, L / 2 + 0.014, 0.75, 0.75, 1, 0, 0xff6b9a, 0, Math.PI / 2);                     // rose window
@@ -220,7 +220,7 @@
       const tz = L / 2 + 0.35;                                                  // west tower with spire and clock
       f(P.BOX, 0, 0, tz, 0.95, H * 2.0, 0.95, 0, wall, 0.05);
       f(P.CONE4, 0, H * 2.0, tz, 1.3, 2.1, 1.3, Math.PI / 4, roof, 0.05);
-      f(P.BALL, 0, H * 2.0 + 2.1, tz, 0.13, 0.13, 0.13, 0, 0xffd23f);
+      f(P.SBALL, 0, H * 2.0 + 2.1, tz, 0.13, 0.13, 0.13, 0, 0xffd23f);
       f(P.DISC, 0, H * 1.6, tz + 0.49, 0.5, 0.5, 1, 0, 0xffffff, 0, Math.PI / 2); f(P.QUAD, 0.06, H * 1.6 + 0.08, tz + 0.5, 0.04, 0.2, 1, 0, 0x222222); f(P.QUAD, 0.04, H * 1.6, tz + 0.5, 0.15, 0.04, 1, 0, 0x222222);
       f(P.QUAD, 0, 0.45, tz + 0.49, 0.38, 0.8, 1, 0, DOOR);
     }
@@ -258,7 +258,7 @@
       g(P.BOX, 0, 0, 0, 0.9, 0.35, 0.5, 0, 0x9a6a3a, 0.02);
       for (const s of [-1, 1]) g(P.CYL8, s * 0.4, 0.35, -0.2, 0.04, 0.45, 0.04, 0, 0x6b4423);
       for (let k = 0; k < 4; k++) g(P.BOX, (k + 0.5) / 4 * 0.98 - 0.49, 0.78, 0.0, 0.245, 0.04, 0.7, 0, awn[i][k % 2], 0.015, -0.35, 0);
-      for (let k = 0; k < 3; k++) g(P.BALL, (k - 1) * 0.25, 0.37, 0.05, 0.14, 0.14, 0.14, 0, [0xff4d4d, 0xffa62b, 0x8bd650][(k + i) % 3]);
+      for (let k = 0; k < 3; k++) g(P.SBALL, (k - 1) * 0.25, 0.37, 0.05, 0.14, 0.14, 0.14, 0, [0xff4d4d, 0xffa62b, 0x8bd650][(k + i) % 3]);
     }
     LM.clocktower(W, rnd, x + Math.sin(ry) * 3.1, z + Math.cos(ry) * 3.1, ry, o);
     return { r: 3.6, square: 3.2 };
@@ -423,17 +423,19 @@
       occ.push([x, z, 0.35]); tree(W, rnd, x, z, desert ? 'palm' : rnd() < 0.35 ? 'pine' : 'round');
     }
     // lamp posts round the square
-    for (let i = 0; i < 8; i++) { const a = i / 8 * 6.28 + 0.2, x = Math.sin(a) * (sqR - 0.25), z = Math.cos(a) * (sqR - 0.25); if (!onLand(x, z)) continue; W.put(P.CYL8, x, W.sag(x, z), z, 0.05, 0.8, 0.05, 0, 0x2a2a30); W.put(P.BALL, x, W.sag(x, z) + 0.82, z, 0.16, 0.16, 0.16, 0, GLOW); }
+    for (let i = 0; i < 8; i++) { const a = i / 8 * 6.28 + 0.2, x = Math.sin(a) * (sqR - 0.25), z = Math.cos(a) * (sqR - 0.25); if (!onLand(x, z)) continue; W.put(P.CYL8, x, W.sag(x, z), z, 0.05, 0.8, 0.05, 0, 0x2a2a30); W.put(P.SBALL, x, W.sag(x, z) + 0.82, z, 0.16, 0.16, 0.16, 0, GLOW); }
     return { houses, streetD, sqR, smoke: lm.flatMap(l => l.smoke || []) };
   }
 
   /* town ground: cobbles on the streets and square, packed earth between, fading out at the edge */
   function ground(W, o, plan) {
-    const R = o.R * 1.12, N = Math.ceil(R / 0.3), out = W.gnd;
+    const R = o.R * 1.12, N = Math.ceil(R / (o.age === 'modern' ? 0.4 : o.age === 'space' ? 0.48 : 0.3)), out = W.gnd;
     const cob = col(o.biome === 'desert' ? 0xe3c48f : 0xd9cdb5), cob2 = col(o.biome === 'desert' ? 0xcfae78 : 0xc2b49a), dirt = col(o.biome === 'desert' ? 0xe8cf9c : o.biome === 'savanna' ? 0xc9c27a : 0x9ccf6a);
     const g = [], idx = (i, j) => j * (2 * N + 1) + i;
     for (let j = -N; j <= N; j++) for (let i = -N; i <= N; i++) {
-      const x = i / N * R, z = j / N * R, r = Math.hypot(x, z), sd = plan.streetD(x, z), on = r <= R && o.land(x, z);
+      const x = i / N * R, z = j / N * R, r = Math.hypot(x, z), on = r <= R && o.land(x, z);
+      if (plan.paint) { const q = on ? plan.paint(x, z, i, j) : null; g.push({ x, z, on, c: q ? q[0] : dirt, a: q ? q[1] : 0 }); continue; }
+      const sd = plan.streetD(x, z);
       const st = 1 - Math.min(1, Math.max(0, (sd - 0.3) / 0.2)), sq = r < plan.sqR ? 1 : 0, k = Math.max(st, sq), hh = Math.sin(i * 12.9898 + j * 78.233) * 43758.5453, chk = (hh - Math.floor(hh)) < 0.5 ? cob : cob2;
       const c = [dirt[0] + (chk[0] - dirt[0]) * k, dirt[1] + (chk[1] - dirt[1]) * k, dirt[2] + (chk[2] - dirt[2]) * k];
       g.push({ x, z, on, c, a: on ? Math.max(k * (r < R * 0.95 ? 1 : 0), 1 - Math.min(1, Math.max(0, (r - R * 0.7) / (R * 0.25)))) : 0 });
@@ -447,12 +449,197 @@
     }
   }
 
+
+  /* ------------------------------------------------------------------------------------------------ stone age: farms */
+  function buildFarm(W, rnd, o) {
+    const P = PRIM, R = o.R, land = o.land, occ = [], desert = o.biome === 'desert', sav = o.biome === 'savanna';
+    const free = (x, z, r) => { for (const q of occ) if ((q[0] - x) ** 2 + (q[1] - z) ** 2 < (q[2] + r) ** 2) return false; return true; };
+    const TYPES = desert ? ['date', 'fallow', 'ploughed', 'millet'] : sav ? ['millet', 'ploughed', 'grass', 'wheat'] : ['wheat', 'grass', 'ploughed', 'grass', 'flax', 'wheat'];
+    const FC = { wheat: [0xf2cf5b, 0xd9b03a], grass: [0x8fd65a, 0x6fbf45], ploughed: [0xa8784a, 0x8a5e36], flax: [0x9fb6ff, 0x7c95e8], millet: [0xe0c27a, 0xc9a35a], fallow: [0xd9c99a, 0xc4b07a], date: [0xd9c48a, 0xbfa76a] };
+    const fields = [];
+    for (let i = 0; i < 16; i++) { const a = rnd() * 6.28, r = Math.sqrt(rnd()) * R * 0.9; fields.push({ x: Math.sin(a) * r, z: Math.cos(a) * r, t: TYPES[Math.floor(rnd() * TYPES.length)], ang: rnd() * Math.PI }); }
+    const near2 = (x, z) => { let a = 1e9, b = 1e9, fi = 0; fields.forEach((f, i) => { const d = (f.x - x) ** 2 + (f.z - z) ** 2; if (d < a) { b = a; a = d; fi = i; } else if (d < b) b = d; }); return [fi, Math.sqrt(b) - Math.sqrt(a)]; };
+    const paths = [rnd() * 6.28]; paths.push(paths[0] + 2.2 + rnd(), paths[0] + 4.1 + rnd());
+    const pathD = (x, z) => { const r = Math.hypot(x, z), a = Math.atan2(x, z); let d = 9; for (const b of paths) { const da = Math.atan2(Math.sin(a - b), Math.cos(a - b)); if (Math.abs(da) < 1.5) d = Math.min(d, Math.abs(Math.sin(da)) * r); } return d; };
+    const farmR = 2.0;
+    const paint = (x, z) => {
+      const r = Math.hypot(x, z); if (r > R * 1.05) return null;
+      if (r < farmR) return [col(desert ? 0xe8cf9c : 0xb9a37a), 1];
+      if (pathD(x, z) < 0.3) return [col(0xc9ae7e), 1];
+      const [fi, gap] = near2(x, z), f = fields[fi];
+      if (gap < 0.28 && !desert) return [col(0x3f8a3a), 1];                     // hedges between fields
+      return [col(FC[f.t][0]), 1 - Math.max(0, (r - R * 0.85) / (R * 0.2))];
+    };
+    occ.push([0, 0, 0.6]);
+    // crop rows: thin darker strips lying on each field
+    for (const [fi, f] of fields.entries()) {
+      if (f.t === 'grass' || f.t === 'fallow') continue;
+      const cx = Math.cos(f.ang), sz = Math.sin(f.ang);
+      for (let k = -8; k <= 8; k++) for (let m = -8; m <= 8; m++) {
+        const x = f.x + k * 0.42 * cx - m * 0.55 * sz, z = f.z + k * 0.42 * sz + m * 0.55 * cx, r = Math.hypot(x, z);
+        if (r < farmR + 0.3 || r > R * 0.98 || near2(x, z)[0] !== fi || near2(x, z)[1] < 0.45 || pathD(x, z) < 0.45 || !land(x, z)) continue;
+        if (f.t === 'date') { if ((k + m) % 3 === 0) { occ.push([x, z, 0.3]); tree(W, rnd, x, z, 'palm'); } continue; }
+        W.put(P.QUAD, x, W.sag(x, z) + 0.09, z, 0.5, 0.13, 1, -f.ang + Math.PI / 2, FC[f.t][1], 0, -Math.PI / 2);
+      }
+    }
+    // the farmstead: a longhouse or two, round huts, haystacks, a well, a little fence
+    const nh = 2 + Math.floor(rnd() * 3);
+    for (let i = 0; i < nh; i++) {
+      const a = i / nh * 6.28 + rnd() * 0.5, r = 1.0 + rnd() * 0.5, x = Math.sin(a) * r, z = Math.cos(a) * r;
+      if (!land(x, z)) continue;
+      occ.push([x, z, 0.8]);
+      if (i === 0 && !desert) {
+        const f = W.frame(x, W.sag(x, z), z, a + Math.PI / 2);
+        f(P.BOX, 0, -0.2, 0, 1.0, 0.85, 2.2, 0, 0x8a6a4a, 0.04);
+        f(P.GABLE, 0, 0.6, 0, 1.6, 1.05, 2.5, 0, 0xd9b65a, 0.045);
+        f(P.QUAD, 0, 0.3, 1.112, 0.3, 0.5, 1, 0, 0x3a2418); f(P.QUAD, 0.3, 0.42, 1.112, 0.16, 0.16, 1, 0, GLOW);
+      } else roundHut(W, rnd, x, z, { r: 0.45 + rnd() * 0.1, wall: desert ? 0xe8cf9c : 0xa8825a, roof: 0xd9b65a });
+    }
+    const well = [Math.sin(paths[0] + 1) * 0.3, Math.cos(paths[0] + 1) * 0.3];
+    W.put(P.CYL12, well[0], W.sag(0, 0) - 0.1, well[1], 0.5, 0.4, 0.5, 0, 0xa59a8a, 0.03); W.put(P.DISC, well[0], W.sag(0, 0) + 0.31, well[1], 0.36, 1, 0.36, 0, 0x3a6aa0);
+    for (const s2 of [-1, 1]) W.put(P.BOX, well[0] + s2 * 0.22, W.sag(0, 0) + 0.3, well[1], 0.05, 0.5, 0.05, 0, 0x6b4423);
+    W.put(P.GABLE, well[0], W.sag(0, 0) + 0.78, well[1], 0.6, 0.25, 0.4, Math.PI / 2, 0xd9b65a, 0.02);
+    for (let i = 0; i < 5; i++) {                                                    // haystacks
+      const a = rnd() * 6.28, r = farmR + 0.4 + rnd() * R * 0.5, x = Math.sin(a) * r, z = Math.cos(a) * r;
+      if (!land(x, z) || !free(x, z, 0.4) || pathD(x, z) < 0.4) continue; occ.push([x, z, 0.4]);
+      W.put(P.CYL12, x, W.sag(x, z) - 0.05, z, 0.6, 0.35, 0.6, 0, 0xe6c35a, 0.03); W.put(P.DOME, x, W.sag(x, z) + 0.3, z, 0.6, 0.55, 0.6, 0, 0xf0d070, 0.03);
+    }
+    // animals grazing on the grass
+    for (let i = 0; i < 24; i++) {
+      const a = rnd() * 6.28, r = farmR + rnd() * (R * 0.95 - farmR), x = Math.sin(a) * r, z = Math.cos(a) * r, [fi] = near2(x, z);
+      if (fields[fi].t !== 'grass' && fields[fi].t !== 'fallow' && rnd() < 0.85) continue;
+      if (!land(x, z) || !free(x, z, 0.3)) continue; occ.push([x, z, 0.3]);
+      const f = W.frame(x, W.sag(x, z), z, rnd() * 6.28), cow = rnd() < 0.4;
+      if (cow) { f(P.BOX, 0, 0.18, 0, 0.26, 0.24, 0.5, 0, 0xffffff, 0.02); f(P.BOX, 0.0, 0.2, 0.05, 0.27, 0.12, 0.18, 0, 0x2a2a2a); f(P.BOX, 0, 0.28, 0.3, 0.16, 0.16, 0.18, 0, 0x2a2a2a, 0.015); for (const [lx, lz] of [[-0.09, -0.18], [0.09, -0.18], [-0.09, 0.18], [0.09, 0.18]]) f(P.BOX, lx, 0, lz, 0.05, 0.18, 0.05, 0, 0x2a2a2a); }
+      else { f(P.BALL, 0, 0.12, 0, 0.36, 0.28, 0.44, 0, 0xfbfbf3, 0.02); f(P.SBALL, 0, 0.18, 0.22, 0.14, 0.15, 0.16, 0, 0x2a2a2a); }
+    }
+    // a stone circle on the hill for some villages
+    if (o.seed % 3 === 0) { const a = paths[0] + 3.1, cx = Math.sin(a) * R * 0.75, cz = Math.cos(a) * R * 0.75; if (land(cx, cz)) for (let i = 0; i < 9; i++) { const b = i / 9 * 6.28, x = cx + Math.sin(b) * 1.1, z = cz + Math.cos(b) * 1.1; W.put(P.BOX, x, W.sag(x, z) - 0.1, z, 0.28, 0.75 + (i % 2) * 0.2, 0.18, b, 0x9a9488, 0.025); } }
+    // a few trees round the edge
+    for (let i = 0; i < 14; i++) { const a = rnd() * 6.28, r = R * (0.85 + rnd() * 0.2), x = Math.sin(a) * r, z = Math.cos(a) * r; if (!land(x, z) || !free(x, z, 0.4)) continue; occ.push([x, z, 0.4]); tree(W, rnd, x, z, desert ? 'palm' : rnd() < 0.4 ? 'pine' : 'round'); }
+    return { houses: nh, paint, streetD: pathD, sqR: 0, smoke: [] };
+  }
+
+  /* ------------------------------------------------------------------------------------------------ modern + space age: sprawling cities */
+  const GLASS = [0x7fc8f8, 0x9fe3ff, 0x6aa8e8, 0x8ff0e0, 0xb5c9ff], TOWERC = [0xdfe6ee, 0xc9d3dd, 0xf2f4f7, 0x9aa8b8, 0xe9e1d3, 0x5f6f82];
+  function tower(W, rnd, x, z, ry, w, d, h, space) {
+    const P = PRIM, f = W.frame(x, W.sag(x, z), z, ry), body = TOWERC[Math.floor(rnd() * TOWERC.length)], glass = GLASS[Math.floor(rnd() * GLASS.length)];
+    const round = space && rnd() < 0.45;
+    if (round) {
+      const r = Math.min(w, d);
+      f(P.CYL16, 0, -0.2, 0, r, h + 0.2, r, 0, 0xf4f8fb, 0.05);
+      for (let k = 1; k * 1.4 < h; k++) f(P.TUBE16, 0, k * 1.4, 0, r * 1.03, 0.5, r * 1.03, 0, k % 3 === 0 ? 0x5ff6ff : glass);
+      f(P.DOME, 0, h, 0, r, r * 0.55, r, 0, 0x5ff6ff, 0.04);
+      f(P.CYL8, 0, h + r * 0.5, 0, 0.05, 1.4, 0.05, 0, 0xffffff); f(P.SBALL, 0, h + r * 0.5 + 1.4, 0, 0.14, 0.14, 0.14, 0, 0xff5a5a);
+      return;
+    }
+    f(P.BOX, 0, -0.2, 0, w, h + 0.2, d, 0, body, 0.05);
+    for (const [sx, sz, len, r] of [[0, d / 2 + 0.012, w, 0], [0, -d / 2 - 0.012, w, Math.PI], [w / 2 + 0.012, 0, d, Math.PI / 2], [-w / 2 - 0.012, 0, d, -Math.PI / 2]]) {
+      const n = Math.max(2, Math.round(len / 0.36));
+      for (let i = 0; i < n; i++) { const o2 = (i + 0.5) / n * len - len / 2; f(P.QUAD, sx + (r === 0 || Math.abs(r - Math.PI) < 0.1 ? o2 : 0), h / 2 + 0.1, sz + (r === 0 || Math.abs(r - Math.PI) < 0.1 ? 0 : o2), len / n * 0.62, h - 0.3, 1, r, glass); }
+    }
+    for (let k = 3; k < h - 0.5; k += 3) f(P.BOX, 0, k, 0, w + 0.08, 0.1, d + 0.08, 0, body);   // ledges
+    if (space) for (let k = 2; k < h; k += 4) f(P.BOX, 0, k, 0, w + 0.1, 0.07, d + 0.1, 0, 0x5ff6ff);
+    if (h > 4 && rnd() < 0.6) {                                                       // a set-back crown
+      const h2 = 0.8 + rnd() * 1.6;
+      f(P.BOX, 0, h, 0, w * 0.68, h2, d * 0.68, 0, body, 0.04);
+      for (const r of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) f(P.QUAD, Math.sin(r) * (w * 0.34 + 0.012), h + h2 / 2, Math.cos(r) * (d * 0.34 + 0.012), w * 0.5, h2 * 0.7, 1, r, glass);
+      if (rnd() < 0.7) { f(P.CYL8, 0, h + h2, 0, 0.06, 1.2 + (space ? 1.2 : 0), 0.06, 0, 0xdddddd); f(P.SBALL, 0, h + h2 + 1.2 + (space ? 1.2 : 0), 0, 0.13, 0.13, 0.13, 0, 0xff4a4a); }
+      if (space && rnd() < 0.5) f(P.CONE8, 0, h + h2, 0, w * 0.5, 2.2, d * 0.5, 0, 0xe8f4ff, 0.04);
+    } else { f(P.BOX, w * 0.2, h, -d * 0.15, 0.4, 0.3, 0.3, 0, 0x8a96a5); if (rnd() < 0.4) f(P.CYL12, -w * 0.15, h, d * 0.15, 0.6, 0.06, 0.6, 0, 0xffd23f); }   // roof plant, helipad
+  }
+  function slab(W, rnd, x, z, ry, w, d, h, space) {                         // apartment block
+    const P = PRIM, f = W.frame(x, W.sag(x, z), z, ry), body = space ? [0xf4f8fb, 0xe0f0f4, 0xdff7ee][Math.floor(rnd() * 3)] : [0xf2e6d2, 0xe8d9c4, 0xd7dde8, 0xf0d6c6, 0xdfe8d4, 0xc9b8a8][Math.floor(rnd() * 6)];
+    f(P.BOX, 0, -0.2, 0, w, h + 0.2, d, 0, body, 0.045);
+    for (let k = 0; k + 0.6 <= h; k += 0.62) for (const sgn of [1, -1]) {
+      f(P.QUAD, 0, k + 0.35, sgn * (d / 2 + 0.012), w * 0.86, 0.26, 1, sgn > 0 ? 0 : Math.PI, space ? 0x8ff0e0 : rnd() < 0.2 ? GLOW : PANE);
+      if (!space && sgn > 0 && k > 0) f(P.BOX, 0, k + 0.02, d / 2 + 0.08, w * 0.86, 0.06, 0.16, 0, 0xffffff);
+    }
+    f(P.BOX, w * 0.2, h, 0, 0.35, 0.25, 0.3, 0, 0x9aa3ad); if (rnd() < 0.4) f(P.BOX, -w * 0.25, h, 0, w * 0.3, 0.05, d * 0.6, 0, 0x2f4f7f);  // roof kit, solar panels
+  }
+  function suburb(W, rnd, x, z, ry, pal) {
+    const P = PRIM, f = W.frame(x, W.sag(x, z), z, ry), w = 0.85, d = 0.7, wall = pal.walls[Math.floor(rnd() * pal.walls.length)];
+    f(P.BOX, 0, -0.2, 0, w, 0.85, d, 0, wall, 0.04);
+    f(P.HIP, 0, 0.65, 0, w + 0.2, 0.45, d + 0.2, 0, pal.roofs[Math.floor(rnd() * pal.roofs.length)], 0.04);
+    f(P.QUAD, -0.22, 0.32, d / 2 + 0.012, 0.25, 0.22, 1, 0, PANE); f(P.QUAD, 0.2, 0.25, d / 2 + 0.012, 0.2, 0.4, 1, 0, DOOR);
+    if (rnd() < 0.5) f(P.BOX, -0.25, 0.0, d / 2 + 0.22, 0.3, 0.14, 0.2, Math.PI / 2, [0xff4d4d, 0x3d6fa8, 0xffd23f, 0xffffff][Math.floor(rnd() * 4)], 0.012);   // car in the drive
+  }
+  function buildMetro(W, rnd, o, space) {
+    const P = PRIM, R = o.R, land = o.land, pal = PALETTES[o.biome] || PALETTES.green, occ = [];
+    const free = (x, z, r) => { for (const q of occ) if ((q[0] - x) ** 2 + (q[1] - z) ** 2 < (q[2] + r) ** 2) return false; return true; };
+    const B = space ? 3.0 : 3.2, RW = 0.5, ga = rnd() * Math.PI, cg = Math.cos(ga), sg = Math.sin(ga);
+    const toG = (x, z) => [x * cg - z * sg, x * sg + z * cg], fromG = (u, v) => [u * cg + v * sg, -u * sg + v * cg];
+    const ringR = R * 0.88;
+    const streetD = (x, z) => { const [u, v] = toG(x, z), mu = Math.abs(((u % B) + B) % B - B / 2), mv = Math.abs(((v % B) + B) % B - B / 2); return Math.min(B / 2 - mu, B / 2 - mv, Math.abs(Math.hypot(x, z) - ringR)); };
+    for (const p of o.rail) occ.push([p[0], p[1], 0.8]);
+    if (o.station) for (const s2 of o.station) { if (!land(s2[0], s2[1])) continue; LM.station(W, rnd, s2[0], s2[1], s2[2], o); const c = Math.cos(s2[2]), sn = Math.sin(s2[2]); for (let k = 0; k <= 3; k++) occ.push([s2[0] + 1.3 * c + k * sn, s2[1] - 1.3 * sn + k * c, 0.85]); }
+    // the old town survives in the middle: its landmark, in a little park
+    const heritage = { cathedral: ['church', true], castle: ['castle'], palace: ['palace'], market: ['clocktower'], walled: ['church'], windmills: ['windmill'], harbour: ['lighthouse'], factory: ['factory'] }[o.style] || ['church'];
+    if (land(0, 0)) { const res = LM[heritage[0]](W, rnd, 0, 0, ga, o, heritage[1]); occ.push([0, 0, res.r + 0.4]); }
+    const coreR = R * (space ? 0.5 : 0.32), midR = R * (space ? 0.8 : 0.62), hMax = space ? 10.5 : 7, parks = [];
+    let houses = 0;
+    const NB = Math.ceil(R / B) + 1;
+    for (let i = -NB; i <= NB; i++) for (let j = -NB; j <= NB; j++) {
+      const [cx, cz] = fromG((i + 0.5) * B, (j + 0.5) * B), r = Math.hypot(cx, cz);
+      if (r > ringR - 0.6 || !land(cx, cz)) continue;
+      const inner = B - 2 * RW - 0.2, h = (rnd() + rnd()) / 2, k = 1 - r / R, rot = ga;
+      if (rnd() < 0.08 || (!free(cx, cz, inner * 0.45))) {                         // a park (or the old town)
+        parks.push([cx, cz]);
+        for (let t = 0; t < 4; t++) { const [px, pz] = fromG((i + 0.25 + rnd() * 0.5) * B, (j + 0.25 + rnd() * 0.5) * B); if (free(px, pz, 0.35) && land(px, pz)) { occ.push([px, pz, 0.35]); tree(W, rnd, px, pz, o.biome === 'desert' ? 'palm' : 'round'); } }
+        continue;
+      }
+      if (r < coreR) {
+        const n = rnd() < 0.5 ? 1 : 2;
+        for (let t = 0; t < n; t++) {
+          const w = n === 1 ? inner * (0.55 + rnd() * 0.3) : inner * 0.42, d = n === 1 ? w * (0.8 + rnd() * 0.3) : inner * (0.5 + rnd() * 0.35);
+          const [px, pz] = n === 1 ? [cx, cz] : fromG((i + 0.5) * B + (t ? 1 : -1) * inner * 0.25, (j + 0.5) * B);
+          const hh = 3 + (hMax - 3) * Math.pow(k * 0.6 + h * 0.6, 1.3);
+          if (!free(px, pz, Math.max(w, d) * 0.5)) continue;
+          tower(W, rnd, px, pz, rot, w, d, Math.min(hMax, hh), space); houses++;
+        }
+      } else if (r < midR) {
+        for (const t of [-1, 1]) {
+          const [px, pz] = fromG((i + 0.5) * B, (j + 0.5) * B + t * inner * 0.25); if (!land(px, pz) || !free(px, pz, 0.6)) continue;
+          slab(W, rnd, px, pz, rot + (t > 0 ? 0 : Math.PI), inner * 0.9, inner * 0.36, 1.3 + h * (space ? 3.8 : 2.6), space); houses++;
+        }
+      } else {
+        for (const [a, b] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+          const [px, pz] = fromG((i + 0.5) * B + a * inner * 0.25, (j + 0.5) * B + b * inner * 0.25); if (!land(px, pz) || !free(px, pz, 0.45)) continue;
+          if (space) slab(W, rnd, px, pz, rot + (b > 0 ? 0 : Math.PI), inner * 0.42, inner * 0.38, 0.7 + rnd() * 0.8, true); else suburb(W, rnd, px, pz, rot + (b > 0 ? 0 : Math.PI), pal);
+          houses++;
+        }
+      }
+    }
+    // cars and lane markings on the roads
+    const carC = [0xff4d4d, 0x3d6fa8, 0xffd23f, 0xffffff, 0x2a2a2a, 0x7ed957, 0xff9f43];
+    for (let i = -NB; i <= NB; i++) for (let j = -NB; j <= NB; j++) for (const horiz of [0, 1]) {
+      for (let t = 0.15; t < 0.9; t += 0.25) {
+        const [x, z] = horiz ? fromG((i + t) * B, j * B) : fromG(i * B, (j + t) * B), r = Math.hypot(x, z);
+        if (r > ringR || !land(x, z) || !free(x, z, 0.1)) continue;
+        W.put(P.QUAD, x, W.sag(x, z) + 0.085, z, 0.06, 0.3, 1, ga + (horiz ? Math.PI / 2 : 0), 0xffffff, 0, -Math.PI / 2);
+        if (rnd() < (space ? 0.15 : 0.35)) { const side = rnd() < 0.5 ? 1 : -1, ox = horiz ? 0 : side * 0.16, oz = horiz ? side * 0.16 : 0, [dx, dz] = fromG(ox, oz);
+          if (space) W.put(P.BALL, x + dx, W.sag(x, z) + 0.25, z + dz, 0.24, 0.1, 0.4, ga + (horiz ? Math.PI / 2 : 0), 0x9ff6ff, 0.01);
+          else W.put(P.BOX, x + dx, W.sag(x, z) + 0.05, z + dz, 0.18, 0.14, 0.36, ga + (horiz ? Math.PI / 2 : 0), carC[Math.floor(rnd() * carC.length)], 0.012); }
+      }
+    }
+    const asphalt = col(space ? 0x55606e : 0x6a6e78), pave = col(space ? 0xe6eef2 : 0xcfc9bd), grass = col(o.biome === 'desert' ? 0xe0c48a : 0x7cc455), side = col(space ? 0xbfe9f0 : 0xb5afa3);
+    const paint = (x, z) => {
+      const r = Math.hypot(x, z); if (r > R * 1.02) return null;
+      const sd = streetD(x, z), fade = 1 - Math.max(0, (r - ringR) / (R * 1.02 - ringR));
+      if (sd < RW * 0.75) return [asphalt, Math.max(0.3, fade)];
+      if (sd < RW) return [side, fade];
+      for (const p of parks) if (Math.abs(p[0] - x) < B / 2 && Math.abs(p[1] - z) < B / 2) return [grass, fade];
+      return [r < midR ? pave : grass, fade];
+    };
+    return { houses, paint, streetD, sqR: 0, smoke: [] };
+  }
+
   function build(THREE, o) {
     T = THREE; prims();
     let s = o.seed >>> 0 || 1; const rnd = () => { s = (s + 0x6D2B79F5) | 0; let t = Math.imul(s ^ (s >>> 15), 1 | s); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
     const W = makeWriter(o.root, o.sagK);
     W.prim = PRIM; W.gnd = new Acc();
-    const plan = buildTown(W, rnd, o);
+    const plan = o.age === 'stone' ? buildFarm(W, rnd, o) : o.age === 'modern' ? buildMetro(W, rnd, o, false) : o.age === 'space' ? buildMetro(W, rnd, o, true) : buildTown(W, rnd, o);
     ground(W, o, plan);
     const gg = new T.BufferGeometry(); gg.setAttribute('position', new T.Float32BufferAttribute(W.gnd.p, 3)); gg.setAttribute('normal', new T.Float32BufferAttribute(W.gnd.n, 3)); gg.setAttribute('color', new T.Float32BufferAttribute(W.gnd.c, 4)); gg.computeBoundingSphere();
     return { geo: toGeo(W.out), ink: toGeo(W.ink), ground: gg, houses: plan.houses, smoke: plan.smoke };

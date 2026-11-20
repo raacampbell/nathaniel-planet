@@ -55,6 +55,8 @@
   #bar .btn.round:hover,#bar .btn.round.on{background:#3b1fa3}
   body:not(.political) .label.country{display:none}
   .label.country{background:transparent;border:0;box-shadow:none;color:#fff;font-size:15px;letter-spacing:1.5px;text-transform:uppercase;text-shadow:0 1px 0 #2a1450,0 0 6px #2a1450,0 0 2px #2a1450;pointer-events:none!important}
+  #ageMsg{position:fixed;left:50%;top:40%;transform:translate(-50%,-50%);font-size:22px;padding:14px 26px;border-radius:999px;background:var(--card);border:2px solid var(--edge);opacity:0;transition:opacity .3s;pointer-events:none;z-index:30}
+  #ageMsg.on{opacity:1}
   #updBtn{position:fixed;right:14px;bottom:14px;z-index:21}
   .btn.round.on{background:#ffffff33;border-color:#fff}
   .btn.round.checking svg{animation:updspin .9s linear infinite}
@@ -78,6 +80,7 @@
 <canvas id="c"></canvas>
 <div id="title"><h1>Nathaniel Planet</h1><p>Anton's vision of another world</p></div>
 <div id="bar">
+  <button class="btn round" id="ageBtn" aria-label="Travel in time" title="Travel in time"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2h12M6 22h12"/><path d="M7 2c0 6 10 6 10 10S7 16 7 22"/><path d="M17 2c0 6-10 6-10 10s10 4 10 10"/></svg></button>
   <button class="btn round" id="polBtn" aria-label="Show countries" title="Show countries"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 21V3"/><path d="M5 4h11l-2 4 2 4H5"/></svg></button>
   <button class="btn round" id="cityBtn" aria-label="Cities" title="Cities"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21V12l4-3 4 3v9"/><path d="M11 21V8h5v13"/><path d="M16 21v-7h5v7"/><path d="M13.5 8V3.5l3 1.2-3 1.2"/><path d="M2 21h20"/></svg></button>
   <button class="btn round" id="wonderBtn" aria-label="Wonders" title="Wonders"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21l6.5-12h5L21 21z"/><path d="M12 6V2.5M8.5 5L6.5 2.5M15.5 5l2-2.5"/></svg></button>
@@ -86,6 +89,7 @@
   <div id="updMsg"></div>
 <div id="places"></div>
 <div id="card"><button id="cardX" aria-label="close">×</button><h2></h2><p></p></div>
+<div id="ageMsg"></div>
 <div id="loading">Making a planet…</div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
@@ -697,13 +701,15 @@ function build() {
   }
   mtnBake.finish(planetGroup);
 
-  /* ---------- towns: each with its own personality (see city-gen.js) ---------- */
+  /* ---------- towns: each with its own personality (see city-gen.js), rebuilt for each age ---------- */
   const TOWN_S = 0.025 * K;                       // world size of one town unit (one small house)
+  const AGE_R = { stone: 1, steam: 1, modern: 2, space: 2.66 };
   cities.forEach(c => { c.Rw = c.Ru * TOWN_S; });
-  const townGroup = new T.Group(); planetGroup.add(townGroup);
-  const townSmoke = [];
+  let townGroup = new T.Group(); planetGroup.add(townGroup);
+  const avoidN = [fugi.n, fug2.n, nug.n].map((n, i) => [n, [0.075, 0.03, 0.045][i]]).concat(mtnN.map(n => [n, 0.022]));
+  const townPrep = [];
   {
-    const STY = CityGen.STYLES, order = ['walled', 'castle', 'cathedral', 'market', 'windmills', 'factory', 'walled', 'castle', 'cathedral', 'market', 'factory', 'windmills'];
+    const order = ['walled', 'castle', 'cathedral', 'market', 'windmills', 'factory', 'walled', 'castle', 'cathedral', 'market', 'factory', 'windmills'];
     let oi = 0;
     cities.forEach((c, idx) => {
       const n = c.n, uu = new T.Vector3().crossVectors(n, Math.abs(n.y) > 0.95 ? new T.Vector3(1, 0, 0) : UP).normalize(), ww = new T.Vector3().crossVectors(uu, n);
@@ -711,14 +717,13 @@ function build() {
       const root = new T.Matrix4().makeBasis(ua.clone().multiplyScalar(TOWN_S), n.clone().multiplyScalar(TOWN_S), wa.clone().multiplyScalar(TOWN_S)).setPosition(n);
       const inv = new T.Matrix4().makeBasis(ua, n, wa).invert(), toLocal = v => { const q = v.clone().sub(n).applyMatrix4(inv); return [q.x / TOWN_S, q.z / TOWN_S]; };
       const wv = new T.Vector3(), land = (x, z) => { wv.set(x, 0, z).applyMatrix4(root).normalize(); return P.isLand([wv.x, wv.y, wv.z]); };
-      // which way is the sea (for harbour towns)
+      const landClear = (x, z) => { if (!land(x, z)) return false; for (const [m, r] of avoidN) if (wv.dot(m) > Math.cos(r)) return false; return true; };   // wv set by land()
       let seaDir = null;
       for (let k = 0; k < 24 && seaDir === null; k++) for (const r of [c.Ru * 0.9, c.Ru * 1.3]) { const a = k / 24 * 6.28; if (!land(Math.sin(a) * r, Math.cos(a) * r)) { seaDir = a; break; } }
-      // railway inside the town, and a station where each line ends
       const railLocal = [], station = [];
       for (const e of rail.edges) for (const [end, pts] of [[e.a, e.pts], [e.b, e.pts.slice().reverse()]]) {
         if (end !== c) continue;
-        const loc = pts.slice(0, 60).map(toLocal).filter(q => Math.hypot(q[0], q[1]) < c.Ru * 1.3);
+        const loc = pts.slice(0, 160).map(toLocal).filter(q => Math.hypot(q[0], q[1]) < c.Ru * 3.6);
         railLocal.push(...loc);
         if (loc.length > 2) { const a = loc[0], b = loc[2]; station.push([a[0], a[1], Math.atan2(b[0] - a[0], b[1] - a[1])]); }
       }
@@ -727,21 +732,49 @@ function build() {
       else if (seaDir !== null && idx % 3 === 0) style = 'harbour';
       else style = order[oi++ % order.length];
       c.style = style;
-      const res = CityGen.build(T, { root, sagK: TOWN_S / 2, R: c.Ru, biome: c.biome === 'ice' ? 'green' : c.biome, style, seed: 9173 + idx * 7919, land, rail: railLocal, station, seaDir: seaDir === null ? 0 : seaDir,
-        flag: [0xff4d6d, 0xffd23f, 0x4ecdc4, 0x9b7bff][idx % 4], flag2: [0x3d6fa8, 0x8a3a52, 0x2f8a4a][idx % 3] });
-      const m = new T.Mesh(res.geo, toon(0xffffff, { vertexColors: true })), mi = new T.Mesh(res.ink, inkMat);
-      const mg = new T.Mesh(res.ground, new T.MeshLambertMaterial({ vertexColors: true, transparent: true, depthWrite: false })); mg.renderOrder = 2;
-      townGroup.add(mg, m, mi); c.houses = res.houses;
-      for (const sp of res.smoke) townSmoke.push(new T.Vector3(sp[0], sp[1], sp[2]).applyMatrix4(root));
-      const hit = new T.Mesh(new T.SphereGeometry(c.Rw * 0.8, 8, 6), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
-      hit.position.copy(c.n).multiplyScalar(1.005);
+      townPrep.push({ c, idx, root, land, landClear, railLocal, station, seaDir, style });
+      const hit = new T.Mesh(new T.SphereGeometry(1, 8, 6), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+      hit.position.copy(c.n).multiplyScalar(1.005); hit.scale.setScalar(c.Rw * 0.8); c.hit = hit;
       hit.userData = { kind: 'city', ref: c };
       planetGroup.add(hit); pickables.push(hit);
-      addLabel(c.name, c.n, 1.0 + c.Rw * 0.55, '', () => select('city', c));
+      c.label = addLabel(c.name, c.n, 1.0 + c.Rw * 0.55, '', () => select('city', c));
     });
   }
+  function buildTown(tp, age) {
+    const c = tp.c, R = c.Ru * AGE_R[age];
+    const big = age === 'modern' || age === 'space';
+    const res = CityGen.build(T, { root: tp.root, sagK: TOWN_S / 2, R, biome: c.biome === 'ice' ? 'green' : c.biome, style: tp.style, seed: 9173 + tp.idx * 7919, age,
+      land: big ? tp.landClear : tp.land, rail: age === 'stone' ? [] : tp.railLocal.filter(q => Math.hypot(q[0], q[1]) < R * 1.3), station: age === 'stone' ? [] : tp.station, seaDir: tp.seaDir === null ? 0 : tp.seaDir,
+      flag: [0xff4d6d, 0xffd23f, 0x4ecdc4, 0x9b7bff][tp.idx % 4], flag2: [0x3d6fa8, 0x8a3a52, 0x2f8a4a][tp.idx % 3] });
+    const g = new T.Group();
+    const mg = new T.Mesh(res.ground, new T.MeshLambertMaterial({ vertexColors: true, transparent: true, depthWrite: false })); mg.renderOrder = 2;
+    g.add(mg, new T.Mesh(res.geo, toon(0xffffff, { vertexColors: true })), new T.Mesh(res.ink, inkMat));
+    g.userData.n = c.n; c.houses = res.houses;
+    return g;
+  }
+  function disposeGroup(g) { g.traverse(o => { if (o.isMesh) { o.geometry.dispose(); if (o.material !== inkMat) o.material.dispose(); } }); }
+  // towns behind the planet are not drawn
+  tickers.push(() => { const cd = camera.position.clone().normalize(); for (const g of townGroup.children) g.visible = g.userData.n.dot(cd) > -0.25; });
+  function setTownAge(age, done) {
+    const fresh = new T.Group(); let i = 0;
+    const step = () => {
+      const t0 = performance.now();
+      while (i < townPrep.length && performance.now() - t0 < 30) fresh.add(buildTown(townPrep[i++], age));
+      if (i < townPrep.length) { setTimeout(step, 0); return; }
+      planetGroup.remove(townGroup); disposeGroup(townGroup); townGroup = fresh; planetGroup.add(townGroup);
+      cities.forEach(c => { c.Rw = c.Ru * AGE_R[age] * TOWN_S; c.hit.scale.setScalar(c.Rw * 0.8); c.label.pos.copy(c.n).multiplyScalar(1.0 + Math.min(c.Rw * 0.4, 0.05) + (age === 'space' ? 0.06 : age === 'modern' ? 0.035 : 0.01)); });
+      if (done) done();
+    };
+    step();
+  }
+  townPrep.forEach(tp => townGroup.add(buildTown(tp, 'steam')));
 
   /* trees, bushes and cacti: instanced */
+  const treeSets = [];
+  function clearTrees(age) {
+    const zero = new T.Matrix4().makeScale(0, 0, 0);
+    for (const S of treeSets) { S.arr.forEach((t, i) => { const hide = cities.some(c => angle(t.n, c.n) < c.Ru * AGE_R[age] * TOWN_S * 1.02) || (age === 'space' && launch.n && angle(t.n, launch.n) < 0.04); S.m.setMatrixAt(i, hide ? zero : S.mats[i]); S.ink.setMatrixAt(i, hide ? zero : S.imats[i]); }); S.m.instanceMatrix.needsUpdate = S.ink.instanceMatrix.needsUpdate = true; }
+  }
   {
     const gcol = (hex) => new T.Color(hex);
     const trunk = () => new T.CylinderGeometry(0.0022, 0.0032, 0.014, 6).translate(0, 0.007, 0);
@@ -778,7 +811,7 @@ function build() {
         const v = 0.85 + rng() * 0.3, hue = t.b === 'savanna' ? [1.18, 1.05, 0.62] : t.b === 'ice' ? [0.9, 1.1, 1.25] : [1, 1, 1];
         tint.setRGB(v * hue[0], v * hue[1], v * hue[2]); m.setColorAt(i, tint);
       });
-      planetGroup.add(m, ink);
+      planetGroup.add(m, ink); treeSets.push({ m, ink, arr, mats: Array.from({ length: arr.length }, (_, i) => { const q = new T.Matrix4(); m.getMatrixAt(i, q); return q; }), imats: Array.from({ length: arr.length }, (_, i) => { const q = new T.Matrix4(); ink.getMatrixAt(i, q); return q; }) });
     }
   }
 
@@ -1382,7 +1415,7 @@ function build() {
     puffMat.uniforms.uScale.value = innerHeight * 0.5 * renderer.getPixelRatio() / Math.tan(camera.fov * Math.PI / 360) / 2.3;
     for (const S of puffSys) {
       const b = S.b, moving = !b.cur.docked;
-      S.acc += (moving ? 10 : 1.5) * dt;
+      S.acc += (AGE !== 'steam' ? 0 : moving ? 10 : 1.5) * dt;
       while (S.acc >= 1) {
         S.acc--; const i = S.next; S.next = (S.next + 1) % S.N;
         _pv.set(0.062 * K * 1.05, 0.037 * K * 1.05, 0); b.g.localToWorld(_pv);
@@ -1567,11 +1600,269 @@ function build() {
     }
   });
 
+  /* ================================================================= AGES ================================================================= */
+  let AGE = 'steam';
+  const ageGroups = { modern: new T.Group(), space: new T.Group(), both: new T.Group() };     // things that only exist in later ages
+  Object.values(ageGroups).forEach(g => { g.visible = false; planetGroup.add(g); });
+  const tangentFrame = n => { const u = new T.Vector3().crossVectors(n, Math.abs(n.y) > 0.95 ? new T.Vector3(1, 0, 0) : UP).normalize(); return [u, new T.Vector3().crossVectors(u, n)]; };
+  const placeAt = (obj, n, r, spin) => { placeOnSurface(obj, n, r, spin || 0); return obj; };
+  const shell = (geo, color, s) => withInk(new T.Mesh(geo, toon(color)), s || 1.1);
+
+  /* --- stone-age canoes and modern container ships (the sailing ships are the steam age) --- */
+  function makeCanoe() {
+    const g = new T.Group();
+    g.add(shell(new T.SphereGeometry(0.01, 12, 6, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2).scale(4, 1.2, 1).translate(0, 0.012, 0), 0x8a5a2f, 1.15));
+    for (const x of [-0.018, 0.012]) { g.add(new T.Mesh(new T.SphereGeometry(0.004, 8, 6).translate(x, 0.017, 0), toon(0xc98a5a))); g.add(new T.Mesh(new T.BoxGeometry(0.002, 0.002, 0.022).rotateX(0.5).translate(x + 0.004, 0.016, 0), toon(0x5a3a22))); }
+    return g;
+  }
+  function makeContainerShip(col) {
+    const g = new T.Group(), L = 0.12;
+    const hs = new T.Shape(); hs.moveTo(-L / 2, 0.016); hs.lineTo(-L / 2 + 0.006, 0); hs.lineTo(L / 2 - 0.016, 0); hs.quadraticCurveTo(L / 2, 0.004, L / 2 + 0.006, 0.018); hs.lineTo(-L / 2, 0.016);
+    g.add(shell(new T.ExtrudeGeometry(hs, { depth: 0.024, bevelEnabled: false }).translate(0, 0, -0.012), col, 1.06));
+    g.add(new T.Mesh(new T.BoxGeometry(L - 0.004, 0.003, 0.0242).translate(-0.002, 0.0045, 0), toon(0xc0392b)));
+    const cc = [0xff6b6b, 0x3d6fa8, 0xffd23f, 0x2f8a4a, 0xff9f43, 0x9b7bff, 0xffffff];
+    let k = 0;
+    for (let x = -0.03; x < 0.04; x += 0.0132) for (let y = 0; y < 3; y++) for (const z of [-0.0062, 0.0062]) if ((k++ * 7) % 11 !== 0 || y === 0)
+      g.add(withInk(new T.Mesh(new T.BoxGeometry(0.0122, 0.0058, 0.0115).translate(x, 0.0195 + y * 0.006, z), toon(cc[(k * 5 + y) % cc.length])), 1.05));
+    g.add(shell(new T.BoxGeometry(0.012, 0.02, 0.022).translate(-0.047, 0.026, 0), 0xffffff, 1.08));
+    g.add(new T.Mesh(new T.BoxGeometry(0.0125, 0.003, 0.0225).translate(-0.047, 0.031, 0), toon(0x2a3a5a)));
+    g.add(shell(new T.CylinderGeometry(0.0025, 0.003, 0.012, 8).translate(-0.052, 0.04, 0), 0xff4d4d));
+    const wake = new T.Mesh(mergeParts([[-0.075, 0.009], [-0.095, 0.007], [-0.112, 0.005]].map(([x, r]) => [new T.CircleGeometry(r, 14).rotateX(-Math.PI / 2).translate(x, 0.002, 0), new T.Color(1, 1, 1)])), new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, depthWrite: false, side: T.DoubleSide }));
+    g.add(wake);
+    return g;
+  }
+  /* --- fast, slick trains for the modern and space ages --- */
+  function makeBulletTrain(c1, c2) {
+    const units = [], N = 4, len = 0.033;
+    for (let i = 0; i < N; i++) {
+      const cx = 0.05 - i * (len + 0.0015), g = new T.Group(), nose = i === 0, tail = i === N - 1;
+      const body = new T.Mesh(new T.BoxGeometry(len - (nose ? 0.012 : 0), 0.011, 0.012).translate(nose ? -0.006 : 0, 0.0115, 0), toon(0xf6f8fb)); g.add(withInk(body, 1.06));
+      if (nose) { const n2 = new T.Mesh(new T.SphereGeometry(0.0062, 12, 8).scale(2.6, 0.95, 1).translate(len / 2 - 0.013, 0.011, 0), toon(0xf6f8fb)); g.add(withInk(n2, 1.08)); g.add(new T.Mesh(new T.SphereGeometry(0.0045, 10, 6).scale(1.9, 0.6, 1.05).translate(len / 2 - 0.01, 0.0145, 0), toon(0x22324a))); }
+      if (tail) g.add(new T.Mesh(new T.SphereGeometry(0.006, 10, 6).scale(1.2, 0.9, 1).translate(-len / 2 + 0.002, 0.011, 0), toon(0xf6f8fb)));
+      g.add(new T.Mesh(new T.BoxGeometry(len - (nose ? 0.012 : 0) + 0.0005, 0.0018, 0.0123).translate(nose ? -0.006 : 0, 0.0085, 0), toon(c1)));
+      g.add(new T.Mesh(new T.BoxGeometry(len - (nose ? 0.014 : 0.004), 0.0028, 0.0122).translate(nose ? -0.007 : 0, 0.0135, 0), toon(0x2a3a5a)));
+      g.add(new T.Mesh(new T.BoxGeometry(len - 0.004, 0.004, 0.009).translate(0, 0.004, 0), toon(0x3a3f48)));
+      g.add(new T.Mesh(new T.BoxGeometry(len * 0.8, 0.0012, 0.0122).translate(0, 0.017, 0), toon(c2)));
+      const bk = makeBaker(); bk.add(g); const out = new T.Group(); bk.finish(out); out.position.x = -cx;
+      const piv = new T.Group(); piv.add(out); units.push({ piv, cx, half: len / 2 });
+    }
+    return units;
+  }
+  const trains = boats.filter(b => b.rail), ships = boats.filter(b => !b.rail);
+  ships.forEach((b, i) => { b.models = { steam: b.g.children[0] }; b.hullCol = [0x2a3a5a, 0x8a2a2a, 0x2a6a4a, 0x3a3a3a][i % 4]; });
+  trains.forEach((b, i) => { b.unitsBy = { steam: b.units }; b.speed0 = b.speed; });
+  function setVehicles(age) {
+    for (const b of ships) {
+      const key = age === 'stone' ? 'stone' : age === 'steam' ? 'steam' : 'modern';
+      if (!b.models[key]) { const m = key === 'stone' ? makeCanoe() : makeContainerShip(b.hullCol); m.scale.setScalar(K * 1.15); b.g.add(m); b.models[key] = m; }
+      for (const k in b.models) b.models[k].visible = k === key;
+    }
+    trains.forEach((b, i) => {
+      const key = age === 'stone' ? null : age === 'steam' ? 'steam' : 'fast';
+      if (key === 'fast' && !b.unitsBy.fast) { b.unitsBy.fast = makeBulletTrain([0x2f6fb0, 0xc0392b, 0x2e8b57, 0x7a4fb0][i % 4], [0xffd23f, 0x4ecdc4, 0xff9ff3, 0xff9f43][i % 4]); b.unitsBy.fast.forEach(u => { u.piv.scale.setScalar(K * 1.05); planetGroup.add(u.piv); }); }
+      for (const k in b.unitsBy) b.unitsBy[k].forEach(u => { u.piv.visible = k === key; });
+      if (key) b.units = b.unitsBy[key];
+      b.speed = b.speed0 * (key === 'fast' ? 2.4 : 1); b.off = 0;
+      b.g.visible = !!key; b.g.children.forEach(o => { if (o.userData.kind) o.userData.off = !key; });
+    });
+    if (rail.trackMesh) rail.trackMesh.visible = age !== 'stone';
+  }
+
+  /* --- wind turbines (modern and space ages) --- */
+  const turbines = [];
+  {
+    const far = n => cities.every(c => angle(n, c.n) > c.Ru * AGE_R.space * TOWN_S * 1.15) && avoidN.every(([m, r]) => angle(n, m) > r + 0.02);
+    const sites = cand.filter(c => c.b !== 'ice' && Math.abs(c.d[1]) < 0.7 && c.h < 0.45 && far(c.n));
+    const farms = [];
+    for (const c of sites) { if (farms.length >= 12) break; if (farms.some(f => angle(f.n, c.n) < 0.35)) continue; farms.push(c); }
+    const tw = makeBaker(), U = TOWN_S;
+    for (const f of farms) {
+      const [u, w] = tangentFrame(f.n);
+      for (let k = 0; k < 4; k++) {
+        const n = f.n.clone().addScaledVector(u, (k % 2 - 0.5) * 0.028 + (rng() - 0.5) * 0.006).addScaledVector(w, (Math.floor(k / 2) - 0.5) * 0.028).normalize();
+        if (!P.isLand([n.x, n.y, n.z]) || !far(n)) continue;
+        const g = new T.Group();
+        g.add(shell(new T.CylinderGeometry(0.09 * U, 0.17 * U, 4.2 * U, 10).translate(0, 2.1 * U, 0), 0xf4f6f8, 1.12));
+        g.add(shell(new T.BoxGeometry(0.55 * U, 0.3 * U, 0.3 * U).translate(-0.1 * U, 4.25 * U, 0), 0xf4f6f8, 1.1));
+        placeAt(g, n, 0.999, rng() * 6.28); tw.add(g);
+        const rotor = new T.Group(), hub = new T.Group();
+        hub.add(shell(new T.SphereGeometry(0.16 * U, 10, 8), 0xffffff, 1.1));
+        for (let b = 0; b < 3; b++) { const bl = shell(new T.BoxGeometry(0.16 * U, 2.1 * U, 0.04 * U).translate(0, 1.05 * U, 0), 0xffffff, 1.08); bl.rotation.z = b * 2.094; hub.add(bl); }
+        hub.position.set(0.2 * U, 4.25 * U, 0); hub.rotation.y = Math.PI / 2; rotor.add(hub);
+        placeAt(rotor, n, 0.999, g.rotation.y); rotor.quaternion.copy(g.quaternion);
+        ageGroups.both.add(rotor); turbines.push({ hub, sp: 1.6 + rng() * 0.8, ph: rng() * 6 });
+      }
+    }
+    const tg = new T.Group(); tw.finish(tg); ageGroups.both.add(tg);
+    tickers.push((t) => { if (!ageGroups.both.visible) return; for (const tb of turbines) tb.hub.rotation.z = -(t * tb.sp + tb.ph); });
+  }
+
+  /* --- satellites: a few in the modern age, lots in the space age, plus any you launch --- */
+  const satellites = [];
+  function makeSatellite(seedK) {
+    const g = new T.Group(), s = 0.006, kind = seedK % 3;
+    g.add(shell(new T.BoxGeometry(s * 1.4, s * 1.4, s * 1.4), kind === 1 ? 0xd9d9e0 : 0xd9a441, 1.15));
+    for (const sg of [-1, 1]) { const p = new T.Mesh(new T.BoxGeometry(s * 3.2, s * 0.08, s * 1.3).translate(sg * s * 2.5, 0, 0), toon(0x2a4f9a)); g.add(withInk(p, 1.06)); g.add(new T.Mesh(new T.BoxGeometry(s * 0.9, s * 0.1, s * 0.15).translate(sg * s * 1.0, 0, 0), toon(0x999999))); }
+    if (kind !== 2) g.add(shell(new T.ConeGeometry(s * 0.7, s * 0.5, 12, 1, true).rotateX(Math.PI).translate(0, s * 1.0, 0), 0xffffff, 1.1));
+    return g;
+  }
+  function addSatellite(group, r, normal, a0, speed, k) {
+    const g = makeSatellite(k ?? satellites.length); group.add(g);
+    const u = new T.Vector3().crossVectors(normal, Math.abs(normal.y) > 0.9 ? new T.Vector3(1, 0, 0) : UP).normalize(), v = new T.Vector3().crossVectors(normal, u);
+    const S = { g, r, u, v, a: a0, sp: speed || 0.22 / Math.pow(r, 1.5), n: new T.Vector3() };
+    satellites.push(S); return S;
+  }
+  const rndN = () => new T.Vector3(rng() - 0.5, rng() - 0.5, rng() - 0.5).normalize();
+  for (let i = 0; i < 6; i++) addSatellite(ageGroups.both, 1.32 + rng() * 0.45, rndN(), rng() * 6.28, 0, i);
+  for (let i = 0; i < 26; i++) addSatellite(ageGroups.space, 1.25 + rng() * 0.6, rndN(), rng() * 6.28, 0, i + 6);
+  tickers.push((t, dt) => {
+    for (const S of satellites) {
+      if (!S.g.parent || !S.g.parent.visible) continue;
+      S.a += S.sp * dt; const c = Math.cos(S.a), sn = Math.sin(S.a);
+      S.n.copy(S.u).multiplyScalar(c).addScaledVector(S.v, sn); S.g.position.copy(S.n).multiplyScalar(S.r);
+      S.g.lookAt(0, 0, 0); S.g.rotateZ(S.a * 0.3);
+    }
+  });
+
+  /* --- the space station --- */
+  const station = { name: 'Space Station Wibble', n: new T.Vector3(1, 0, 0), lines: ['Space Station Wibble has 12 astronauts, 3 space hamsters and one very confused pigeon.', 'The station goes round the planet every few minutes. The astronauts have stopped saying "wheee". Mostly.', 'Today on the station: zero-gravity porridge. Nobody knows where it went.'], li: 0 };
+  {
+    const g = new T.Group(), sc = 0.0105;
+    const ring = new T.Group();
+    ring.add(withInk(new T.Mesh(new T.TorusGeometry(5 * sc, 0.55 * sc, 10, 48), toon(0xf2f4f7)), 1.05));
+    for (let k = 0; k < 4; k++) { const sp = new T.Mesh(new T.CylinderGeometry(0.2 * sc, 0.2 * sc, 9.6 * sc, 6), toon(0xc9ced6)); sp.rotation.z = k * Math.PI / 4; ring.add(sp); }
+    for (let k = 0; k < 8; k++) { const w = new T.Mesh(new T.BoxGeometry(0.4 * sc, 0.2 * sc, 0.6 * sc), toon(0xfff1a8)); const a = k / 8 * 6.283; w.position.set(Math.cos(a) * 5 * sc, Math.sin(a) * 5 * sc, 0.6 * sc); ring.add(w); }
+    g.add(ring);
+    g.add(withInk(new T.Mesh(new T.CylinderGeometry(0.9 * sc, 0.9 * sc, 9 * sc, 16).rotateX(Math.PI / 2), toon(0xe6e9ee)), 1.06));
+    for (const z of [-4.8, 4.8]) {
+      g.add(withInk(new T.Mesh(new T.SphereGeometry(1.1 * sc, 14, 10).translate(0, 0, z * sc), toon(0xffffff)), 1.06));
+      for (const sx of [-1, 1]) { const pnl = new T.Mesh(new T.BoxGeometry(6 * sc, 0.1 * sc, 2.4 * sc).translate(sx * 4.2 * sc, 0, z * sc), toon(0x2a4f9a)); g.add(withInk(pnl, 1.03)); g.add(new T.Mesh(new T.BoxGeometry(6.05 * sc, 0.06 * sc, 0.12 * sc).translate(sx * 4.2 * sc, 0.06 * sc, z * sc), toon(0xd9d9e0))); }
+    }
+    g.add(new T.Mesh(new T.BoxGeometry(0.9 * sc, 0.6 * sc, 0.06 * sc).translate(0, 1.4 * sc, -5.3 * sc), toon(0xff4d6d)));
+    ageGroups.space.add(g);
+    const hit = new T.Mesh(new T.SphereGeometry(7 * sc, 8, 6), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+    hit.userData = { kind: 'station', ref: station }; g.add(hit); pickables.push(hit);
+    const lab = addLabel(station.name, station.n, 1.5, 'storm', () => select('station', station));
+    const ax = new T.Vector3(0.3, 1, 0.2).normalize(), u0 = new T.Vector3().crossVectors(ax, UP).normalize(), v0 = new T.Vector3().crossVectors(ax, u0);
+    let a = 0;
+    tickers.push((t, dt) => {
+      lab.el.style.visibility = ageGroups.space.visible ? '' : 'hidden'; if (!ageGroups.space.visible) return;
+      a += dt * 0.05; station.n.copy(u0).multiplyScalar(Math.cos(a)).addScaledVector(v0, Math.sin(a));
+      g.position.copy(station.n).multiplyScalar(1.48); g.lookAt(0, 0, 0); ring.rotation.z += dt * 0.25;
+      lab.pos.copy(station.n).multiplyScalar(1.48 + 0.11); lab.n.copy(station.n);
+    });
+    station.hitObj = hit;
+  }
+
+  /* --- the launch pad: tap it and a rocket carries a new satellite into orbit --- */
+  const launch = { name: 'Nathaniel Space Centre', state: 'ready', t: 0, n: null };
+  {
+    let site = null;
+    for (const c of cities) {
+      const Rw = c.Ru * AGE_R.space * TOWN_S, [u, w] = tangentFrame(c.n);
+      for (let k = 0; k < 24 && !site; k++) {
+        const a = k / 24 * 6.283, n = c.n.clone().multiplyScalar(Math.cos(Rw * 1.28)).addScaledVector(u.clone().multiplyScalar(Math.cos(a)).addScaledVector(w, Math.sin(a)), Math.sin(Rw * 1.28)).normalize();
+        if (!P.isLand([n.x, n.y, n.z]) || Math.abs(n.y) > 0.6 || cities.some(o => angle(n, o.n) < o.Ru * AGE_R.space * TOWN_S * 1.1) || avoidN.some(([m, r]) => angle(n, m) < r + 0.015)) continue;
+        let ok = true; for (const [du, dw] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const q = n.clone().addScaledVector(u, du * 0.02).addScaledVector(w, dw * 0.02).normalize(); if (!P.isLand([q.x, q.y, q.z])) ok = false; }
+        if (ok) site = n;
+      }
+      if (site) break;
+    }
+    if (site) {
+      launch.n = site;
+      const U = TOWN_S, base = new T.Group();
+      base.add(shell(new T.CylinderGeometry(3.2 * U, 3.4 * U, 0.3 * U, 24), 0xc9c9c4, 1.04));
+      base.add(new T.Mesh(new T.BoxGeometry(1.4 * U, 0.31 * U, 4 * U).translate(0, 0.01 * U, 2 * U), toon(0x4a4a50)));
+      for (let k = 0; k < 6; k++) base.add(shell(new T.BoxGeometry(0.5 * U, 1.3 * U, 0.5 * U).translate(1.6 * U, 0.15 * U + k * 1.3 * U, -1.6 * U), k % 2 ? 0xff4d4d : 0xd8d8d8, 1.08));
+      base.add(shell(new T.BoxGeometry(1.4 * U, 0.2 * U, 0.2 * U).translate(1.0 * U, 6.5 * U, -1.0 * U), 0xd8d8d8, 1.1));
+      base.add(shell(new T.BoxGeometry(2.2 * U, 1.4 * U, 1.6 * U).translate(-2.6 * U, 0.15 * U, 2.4 * U), 0xffffff, 1.06));
+      base.add(new T.Mesh(new T.CylinderGeometry(1.2 * U, 1.2 * U, 0.06 * U, 16).rotateX(Math.PI / 2).translate(-2.6 * U, 1.0 * U, 3.21 * U), toon(0x2f6fb0)));
+      placeAt(base, site, 0.9995, 0.7); ageGroups.space.add(base);
+      const rocket = new T.Group();
+      rocket.add(shell(new T.CylinderGeometry(0.5 * U, 0.5 * U, 5 * U, 16).translate(0, 2.8 * U, 0), 0xffffff, 1.08));
+      rocket.add(new T.Mesh(new T.CylinderGeometry(0.505 * U, 0.505 * U, 0.35 * U, 16).translate(0, 4.2 * U, 0), toon(0x2a2a30)));
+      rocket.add(new T.Mesh(new T.CylinderGeometry(0.505 * U, 0.505 * U, 0.25 * U, 16).translate(0, 1.6 * U, 0), toon(0x2a2a30)));
+      rocket.add(shell(new T.ConeGeometry(0.5 * U, 1.6 * U, 16).translate(0, 6.1 * U, 0), 0xff4d4d, 1.08));
+      for (let k = 0; k < 4; k++) { const f = shell(new T.BoxGeometry(0.06 * U, 1.2 * U, 0.7 * U).translate(0, 0.9 * U, 0.65 * U), 0xff4d4d, 1.1); f.rotation.y = k * Math.PI / 2; rocket.add(f); }
+      rocket.add(new T.Mesh(new T.CylinderGeometry(0.28 * U, 0.42 * U, 0.5 * U, 12).translate(0, 0.05 * U, 0), toon(0x3a3a3a)));
+      rocket.add(new T.Mesh(new T.BoxGeometry(0.5 * U, 0.3 * U, 0.02 * U).translate(0, 3.4 * U, 0.5 * U), toon(0x2f6fb0)));
+      const flame = new T.Mesh(new T.ConeGeometry(0.4 * U, 2.2 * U, 12).rotateX(Math.PI).translate(0, -1.1 * U, 0), new T.MeshBasicMaterial({ color: 0xffb03a, transparent: true, opacity: 0.9 }));
+      flame.visible = false; rocket.add(flame);
+      placeAt(rocket, site, 0.9995 + 0.25 * U, 0); ageGroups.space.add(rocket);
+      const hit = new T.Mesh(new T.SphereGeometry(4.5 * U, 8, 6), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+      hit.position.copy(site).multiplyScalar(1.0 + 3 * U); hit.userData = { kind: 'launch', ref: launch }; ageGroups.space.add(hit); pickables.push(hit);
+      const lab = addLabel(launch.name, site, 1.0 + 9 * U, 'volcano', () => select('launch', launch));
+      // exhaust
+      const NP = 260, A = { pos: new Float32Array(NP * 3), col: new Float32Array(NP * 3), size: new Float32Array(NP), alpha: new Float32Array(NP) };
+      const pg = new T.BufferGeometry(); pg.setAttribute('position', new T.BufferAttribute(A.pos, 3)); pg.setAttribute('color', new T.BufferAttribute(A.col, 3)); pg.setAttribute('size', new T.BufferAttribute(A.size, 1)); pg.setAttribute('alpha', new T.BufferAttribute(A.alpha, 1));
+      const pm = partShader(T.NormalBlending), pts = new T.Points(pg, pm); pts.frustumCulled = false; ageGroups.space.add(pts);
+      const vel = new Float32Array(NP * 3), life = new Float32Array(NP), max = new Float32Array(NP); let next = 0;
+      const [eu, ew] = tangentFrame(site), up0 = site.clone(), rocketQ0 = rocket.quaternion.clone(), pos0 = rocket.position.clone();
+      launch.rocketN = site.clone();
+      const FLY = 10, _p = new T.Vector3(), _q = new T.Vector3(), _dir = new T.Vector3(), _m4 = new T.Matrix4(), _tail = new T.Vector3();
+      const pathAt = (tt, out) => { const k = Math.min(1, tt / FLY), alt = 0.55 * Math.pow(k, 1.7), dn = 0.9 * Math.pow(k, 2.3); return out.copy(up0).multiplyScalar(Math.cos(dn)).addScaledVector(eu, Math.sin(dn)).normalize().multiplyScalar(1.0 + 0.25 * U + alt); };
+      launch.go = () => { if (launch.state !== 'ready') return false; launch.state = 'ignition'; launch.t = 0; return true; };
+      tickers.push((t, dt) => {
+        lab.el.style.visibility = ageGroups.space.visible ? '' : 'hidden';
+        pm.uniforms.uScale.value = innerHeight * 0.5 * renderer.getPixelRatio() / Math.tan(camera.fov * Math.PI / 360) / 2.3;
+        const emit = (p, v, lifeT, s0, c) => { const i = next; next = (next + 1) % NP; A.pos.set([p.x, p.y, p.z], i * 3); vel.set([v.x, v.y, v.z], i * 3); life[i] = max[i] = lifeT; A.size[i] = s0; A.col.set(c, i * 3); };
+        if (launch.state !== 'ready') {
+          launch.t += dt;
+          if (launch.state === 'ignition') {
+            flame.visible = true; flame.scale.setScalar(0.6 + Math.random() * 0.4);
+            for (let k = 0; k < 6; k++) emit(_p.copy(up0).multiplyScalar(1.001), _q.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(0.02).addScaledVector(up0, 0.004), 1.6 + Math.random(), 0.004, [0.92, 0.92, 0.95]);
+            if (launch.t > 2.2) { launch.state = 'flight'; launch.t = 0; }
+          } else if (launch.state === 'flight') {
+            const tt = launch.t; pathAt(tt, _p); pathAt(tt + 0.05, _q); _dir.copy(_q).sub(_p).normalize();
+            rocket.position.copy(_p); _m4.lookAt(_p, _q, _p.clone().normalize()); rocket.quaternion.setFromRotationMatrix(_m4); rocket.rotateX(-Math.PI / 2);
+            launch.rocketN.copy(_p).normalize();
+            if (focus && focus.n === launch.rocketN) { focus.dist = Math.max(1.45, _p.length() + 0.55); focus.ease = 0.5; }
+            flame.visible = true; flame.scale.set(1, 1 + Math.random() * 0.6, 1);
+            _tail.copy(_p).addScaledVector(_dir, -1.0 * U);
+            for (let k = 0; k < 4; k++) emit(_tail, _q.copy(_dir).multiplyScalar(-0.01).add(new T.Vector3((Math.random() - 0.5) * 0.006, (Math.random() - 0.5) * 0.006, (Math.random() - 0.5) * 0.006)), 1.2 + Math.random(), 0.003 + 0.004 * Math.min(1, tt / 3), Math.random() < 0.4 ? [1, 0.75, 0.3] : [0.95, 0.95, 0.97]);
+            if (tt >= FLY) {
+              const S = addSatellite(ageGroups.space, _p.length(), new T.Vector3().crossVectors(_p, _dir).normalize(), 0, 0);
+              const nn = _p.clone().normalize(); S.a = Math.atan2(nn.dot(S.v), nn.dot(S.u));
+              rocket.visible = false; launch.state = 'deployed'; launch.t = 0; launch.newSat = S;
+              if (focus && focus.n === launch.rocketN) setFocus(S.n, 2.2);
+              showCard(launch.name, 'Satellite deployed! It will go round and round until you close Nathaniel Planet. Tap the pad again for another one.');
+            }
+          } else if (launch.state === 'deployed' && launch.t > 3) {
+            rocket.position.copy(pos0); rocket.quaternion.copy(rocketQ0); rocket.visible = true; flame.visible = false; launch.state = 'ready';
+          }
+        }
+        for (let i = 0; i < NP; i++) {
+          if (life[i] <= 0) { A.alpha[i] = 0; continue; }
+          life[i] -= dt; const k = Math.max(0, life[i] / max[i]);
+          for (let a2 = 0; a2 < 3; a2++) { A.pos[i * 3 + a2] += vel[i * 3 + a2] * dt; vel[i * 3 + a2] *= 1 - 0.8 * dt; }
+          A.size[i] += dt * 0.006; A.alpha[i] = Math.min(1, k * 2) * 0.8;
+        }
+        pg.attributes.position.needsUpdate = pg.attributes.size.needsUpdate = pg.attributes.alpha.needsUpdate = pg.attributes.color.needsUpdate = true;
+      });
+    }
+  }
+
+  /* --- switching ages --- */
+  const ageMsg = document.getElementById('ageMsg');
+  function setAge(age) {
+    if (age === AGE) return;
+    ageMsg.textContent = 'Travelling to the ' + { stone: 'Stone Age', steam: 'Steam Age', modern: 'Modern Age', space: 'Space Age' }[age] + '…'; ageMsg.classList.add('on');
+    setTimeout(() => setTownAge(age, () => {
+      AGE = age; window.__age = age; document.body.dataset.age = age;
+      setVehicles(age); clearTrees(age);
+      ageGroups.both.visible = age === 'modern' || age === 'space'; ageGroups.space.visible = age === 'space';
+      ageMsg.classList.remove('on');
+      if (typeof onAgeChange === 'function') onAgeChange(age);
+    }), 60);
+  }
+  const AGES = [['stone', '🪨 Stone Age'], ['steam', '🚂 Steam Age'], ['modern', '🏙️ Modern Age'], ['space', '🚀 Space Age']];
+
   /* UI lists: a city button and a wonder button, each opening its own list */
   const list = document.getElementById('places'), cityBtn = document.getElementById('cityBtn'), wonderBtn = document.getElementById('wonderBtn');
   const LISTS = {
     city: { btn: cityBtn, title: 'Cities', items: cities.map(c => [c.name, () => select('city', c)]) },
     wonder: { btn: wonderBtn, title: 'Wonders', items: [...volcanoes.map(v => [v.name, () => select('volcano', v)]), ...storms.map(s2 => [s2.name, () => select('storm', s2)])] },
+    age: { btn: document.getElementById('ageBtn'), title: 'Travel in time', get items() { return AGES.map(([k, t]) => [(k === AGE ? '✓ ' : '') + t, () => setAge(k)]); } },
   };
   let openList = null;
   function showList(k) {
@@ -1583,6 +1874,7 @@ function build() {
   }
   cityBtn.onclick = () => showList(openList === 'city' ? null : 'city');
   wonderBtn.onclick = () => showList(openList === 'wonder' ? null : 'wonder');
+  LISTS.age.btn.onclick = () => showList(openList === 'age' ? null : 'age');
 
   /* ---------- detail tiles: very fine ground pictures, made on demand for the part of the planet you are looking at ---------- */
   try {
@@ -1641,7 +1933,7 @@ function build() {
     window.__tiles = tiles;
   } catch (e) { console.warn('detail tiles unavailable', e); }
   world = { P, cities, volcanoes, storms, boats, selectBoat, clearBoat, boatSelected: () => !!sel };
-  if (new URLSearchParams(location.search).has('debug')) window.__np = { countries, camera, controls, scene, planetGroup, boats, storms, volcanoes, cities, rail, T, tilted: () => tiltedMat };
+  if (new URLSearchParams(location.search).has('debug')) window.__np = { setAge: a => setAge(a), launch, satellites, countries, camera, controls, scene, planetGroup, boats, storms, volcanoes, cities, rail, T, tilted: () => tiltedMat };
   const q = new URLSearchParams(location.search).get('go');   // e.g. ?go=volcano | volcano2 | storm | storm2 | city3 | boat2
   if (q) setTimeout(() => { window.__noSpin = true;
     if (q.startsWith('boat')) { const b = boats[+q.slice(4)]; selectBoat(b); camera.position.copy(b.n).multiplyScalar(+(new URLSearchParams(location.search).get('d') || 1.7)); controls.update(); if (focus) focus.ease = 0; return; }
@@ -1660,7 +1952,7 @@ function addLabel(text, n, r, cls, onClick) {
   el.className = 'label ' + cls; el.textContent = text;
   el.addEventListener('click', onClick);
   document.body.appendChild(el);
-  labels.push({ el, pos: n.clone().multiplyScalar(r), n: n.clone() });
+  const L = { el, pos: n.clone().multiplyScalar(r), n: n.clone() }; labels.push(L); return L;
 }
 const _v = new T.Vector3();
 function updateLabels() {
@@ -1692,6 +1984,8 @@ function select(kind, c) {
   if (kind === 'city') { n = c.n; dist = 1.28; showCard(c.name, c.info); }
   else if (kind === 'volcano') { n = c.n; dist = 1.6; c.erupt(); showCard(c.name, VOLCANO_LINES[world.volcanoes.indexOf(c)][lineI++ % 3]); }
   else if (kind === 'storm') { n = c.n; dist = 2.0; c.zap(); showCard(c.name, c.lines[c.li++ % c.lines.length]); }
+  else if (kind === 'station') { n = c.n; dist = 2.3; showCard(c.name, c.lines[c.li++ % c.lines.length]); }
+  else if (kind === 'launch') { const ok = c.go && c.go(); n = c.rocketN || c.n; dist = ok ? 1.45 : 1.3; showCard(c.name, ok ? '3… 2… 1… Lift-off! A brand new satellite is on its way to orbit.' : c.state === 'ready' ? 'The launch pad is waiting.' : 'Hold on, a rocket is already on its way!'); }
   setFocus(n, dist);
 }
 /* ---------- focus: a tapped thing is centred and stays centred (moving things are followed) ---------- */
@@ -1719,7 +2013,7 @@ function pick(ev) {
   camera.matrixWorld.copy(tiltedMat); ray.setFromCamera(mouse, camera);
   const hits = ray.intersectObjects(pickables, false);
   // strip hits hidden behind the planet itself
-  for (const h of hits) { if (h.object.userData.kind === 'planet') return null; return h.object.userData; }
+  for (const h of hits) { const u = h.object.userData; if (u.off) continue; let o = h.object, vis = true; while (o) { if (!o.visible) { vis = false; break; } o = o.parent; } if (!vis) continue; if (u.kind === 'planet') return null; return u; }
   return null;
 }
 canvas.addEventListener('pointerdown', e => { down = { x: e.clientX, y: e.clientY }; });
@@ -1766,7 +2060,7 @@ function applyTilt() {
 }
 function frame(now) {
   requestAnimationFrame(frame);
-  const dt = Math.min(0.05, (now - last) / 1000); last = now; time += dt;
+  const dt = Math.min(0.05, (now - last) / 1000) * (window.__ts || 1); last = now; time += dt;
   starMat.uniforms.time.value = time;
   stepFocus(dt);
   controls.autoRotate = !focus && !window.__noSpin;
