@@ -357,7 +357,7 @@ body.invading #invAlert{opacity:1}
       [192, () => { for (const s of saucers) if (s.state !== 'gone' && s.state !== 'crash') { s.state = 'flee'; s.t = 0; } }],
       [200, () => victory()],
     ];
-    let si = 0, phase = 'attack', done = false;
+    let si = 0, phase = 'attack', done = false, aliensDefeated = false;
 
     /* ---------- the main loop ---------- */
     let lastInput = performance.now(), autoT = 0;
@@ -439,8 +439,16 @@ body.invading #invAlert{opacity:1}
         }
         if (A.state !== 'home') { A.g.position.copy(A.pos); if (A.state !== 'walk' && A.state !== 'run') { _b.copy(nug.n).sub(A.pos); orient(A.g, A.pos.clone().normalize(), _b); } }
       }
+      if (!aliensDefeated && phase === 'retreat' && aliens.length && aliens.every(A => A.state === 'home')) { aliensDefeated = true; for (const J of jets) J.leaving = true; }
       // jets
       for (const J of jets) {
+        if (J.leaving) {
+          J.vel.lerp(J.pos.clone().normalize().multiplyScalar(0.16), 1 - Math.exp(-dt * 1.2));
+          J.pos.addScaledVector(J.vel, dt);
+          J.g.position.copy(J.pos); _c.copy(J.pos).add(J.vel); J.g.lookAt(_c); J.g.rotateY(-Math.PI / 2);
+          if (J.pos.clone().normalize().dot(camDir()) < -0.15 || J.pos.length() > 3) J.gone = true;
+          continue;
+        }
         if (!J.target || J.target.state === 'gone' || J.target.state === 'crash' || J.target.state === 'flee') J.target = nearestSaucer(J.pos);
         const goal = J.target ? _a.copy(J.target.pos).add(_c.copy(rv(1)).set(Math.cos(invT * 1.6 + J.ph), Math.sin(invT * 1.3 + J.ph), Math.cos(invT * 0.9 + J.ph)).multiplyScalar(0.03)) : _a.copy(J.pos).normalize().multiplyScalar(1.12);
         _b.copy(goal).sub(J.pos); J.vel.lerp(_b.normalize().multiplyScalar(0.12), 1 - Math.exp(-dt * 2));
@@ -451,6 +459,17 @@ body.invading #invAlert{opacity:1}
           J.cool = R(0.25, 0.6); const tgt = J.target;
           tracer(J.pos, _b.copy(tgt.pos).sub(J.pos), 0.45, 0xffe14a, J.pos.distanceTo(tgt.pos) / 0.45, () => { if (Math.random() < hitP) { damage(tgt, 1); sparkP.emit(tgt.pos, rv(0.05), 0.4, 0.003, 0.001, [1, 1, 0.6], [1, 0.4, 0]); } });
           note(J.pos, 0.5);
+        }
+      }
+      if (aliensDefeated) {
+        for (let i = jets.length - 1; i >= 0; i--) {
+          const J = jets[i];
+          if (J.gone) {
+            jets.splice(i, 1);
+            const oi = objects.findIndex(o => o[0] === J.g); if (oi >= 0) objects.splice(oi, 1);
+            if (J.g.parent) J.g.parent.remove(J.g);
+            J.g.traverse(m => { if (m.isMesh && m.geometry) m.geometry.dispose(); });
+          }
         }
       }
       // turrets
