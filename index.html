@@ -148,7 +148,9 @@ controls.dampingFactor = 0.07;
 controls.minDistance = 1.06;
 controls.maxDistance = 6;
 controls.autoRotate = true;
-controls.autoRotateSpeed = 0.3;
+controls.autoRotateSpeed = 0.24;
+let lastTouch = performance.now();                       // the planet only starts spinning after 30 s without any interaction
+for (const ev of ['pointerdown', 'pointermove', 'wheel', 'touchstart', 'keydown']) addEventListener(ev, e => { if (ev !== 'pointermove' || e.buttons) lastTouch = performance.now(); }, { passive: true });
 
 const planetGroup = new T.Group();
 scene.add(planetGroup);
@@ -2077,7 +2079,7 @@ function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000) * (window.__ts || 1); last = now; time += dt;
   starMat.uniforms.time.value = time;
   stepFocus(dt);
-  controls.autoRotate = !focus && !window.__noSpin;
+  controls.autoRotate = !focus && !window.__noSpin && performance.now() - lastTouch > 30000;
   { const dd = camera.position.length(); controls.rotateSpeed = Math.max(0.03, 0.25 + (dd - 1.5) * 0.18) * Math.min(1, (dd - 1) / 0.45); controls.zoomSpeed = Math.max(0.06, 1.2 * (dd - 1) / dd); }
   controls.update();
   baseCam.copy(camera.position); baseQuat.copy(camera.quaternion);
