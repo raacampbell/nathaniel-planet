@@ -48,9 +48,13 @@
   .btn{font:inherit;font-size:14px;color:var(--txt);background:#1b1040cc;border:2px solid var(--edge);
     border-radius:999px;padding:7px 14px;cursor:pointer;backdrop-filter:blur(4px)}
   .btn:hover,.btn.on{background:#3b1fa3}
-  .btn.round{position:fixed;right:14px;bottom:14px;z-index:21;width:38px;height:38px;padding:0;display:grid;place-items:center;background:transparent;backdrop-filter:none;border-color:#ffffff66;color:#ffffffcc}
+  .btn.round{width:38px;height:38px;padding:0;display:grid;place-items:center;background:transparent;backdrop-filter:none;border-color:#ffffff66;color:#ffffffcc}
   .btn.round:hover{background:#ffffff26}
   .btn.round svg{display:block}
+  #bar .btn.round{background:#1b1040b3;border-color:var(--edge);color:#fff;backdrop-filter:blur(4px)}
+  #bar .btn.round:hover,#bar .btn.round.on{background:#3b1fa3}
+  #updBtn{position:fixed;right:14px;bottom:14px;z-index:21}
+  .btn.round.on{background:#ffffff33;border-color:#fff}
   .btn.round.checking svg{animation:updspin .9s linear infinite}
   .btn.round.avail{border-color:var(--accent);color:var(--accent);animation:updjiggle 2.6s ease-in-out infinite}
   @keyframes updspin{to{transform:rotate(360deg)}}
@@ -72,8 +76,8 @@
 <canvas id="c"></canvas>
 <div id="title"><h1>Nathaniel Planet</h1><p>Anton's vision of another world</p></div>
 <div id="bar">
-  <button class="btn on" id="spin">Spinning</button>
-  <button class="btn" id="placesBtn">Places</button>
+  <button class="btn round" id="cityBtn" aria-label="Cities" title="Cities"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21V12l4-3 4 3v9"/><path d="M11 21V8h5v13"/><path d="M16 21v-7h5v7"/><path d="M13.5 8V3.5l3 1.2-3 1.2"/><path d="M2 21h20"/></svg></button>
+  <button class="btn round" id="wonderBtn" aria-label="Wonders" title="Wonders"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21l6.5-12h5L21 21z"/><path d="M12 6V2.5M8.5 5L6.5 2.5M15.5 5l2-2.5"/></svg></button>
 </div>
 <button class="btn round" id="updBtn" aria-label="Check for updates" title="Check for updates"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg></button>
   <div id="updMsg"></div>
@@ -1501,39 +1505,83 @@ function build() {
     }
   });
 
-  /* UI lists */
-  const list = document.getElementById('places');
-  list.innerHTML = '<div class="sec">Cities</div>';
-  const mk = (txt, fn) => { const b = document.createElement('button'); b.textContent = txt; b.onclick = fn; list.appendChild(b); };
-  cities.forEach(c => mk(c.name, () => select('city', c)));
-  list.insertAdjacentHTML('beforeend', '<div class="sec">Wonders</div>');
-  volcanoes.forEach(v => mk(v.name, () => select('volcano', v)));
-  storms.forEach(s => mk(s.name, () => select('storm', s)));
+  /* UI lists: a city button and a wonder button, each opening its own list */
+  const list = document.getElementById('places'), cityBtn = document.getElementById('cityBtn'), wonderBtn = document.getElementById('wonderBtn');
+  const LISTS = {
+    city: { btn: cityBtn, title: 'Cities', items: cities.map(c => [c.name, () => select('city', c)]) },
+    wonder: { btn: wonderBtn, title: 'Wonders', items: [...volcanoes.map(v => [v.name, () => select('volcano', v)]), ...storms.map(s2 => [s2.name, () => select('storm', s2)])] },
+  };
+  let openList = null;
+  function showList(k) {
+    for (const key in LISTS) LISTS[key].btn.classList.toggle('on', key === k);
+    openList = k; list.classList.toggle('on', !!k); list.innerHTML = '';
+    if (!k) return;
+    list.insertAdjacentHTML('beforeend', `<div class="sec">${LISTS[k].title}</div>`);
+    for (const [name, fn] of LISTS[k].items) { const b = document.createElement('button'); b.textContent = name; b.onclick = () => { fn(); showList(null); }; list.appendChild(b); }
+  }
+  cityBtn.onclick = () => showList(openList === 'city' ? null : 'city');
+  wonderBtn.onclick = () => showList(openList === 'wonder' ? null : 'wonder');
 
-
-  /* PROTOTYPE (?patch): lays a pre-rendered high-detail ground tile over the planet so we can judge the look */
-  if (new URLSearchParams(location.search).has('patch')) {
-    fetch('proto/patch.json').then(r => r.json()).then(info => {
-      const nz = v => v.clone().normalize();
-      const n = new T.Vector3(...info.n), uu = nz(new T.Vector3().crossVectors(n, UP)), ww = new T.Vector3().crossVectors(n, uu), Hh = Math.tan(info.span / 2);
-      const M = 64, pos = [], uv = [], idx = [];
+  /* ---------- detail tiles: very fine ground pictures, made on demand for the part of the planet you are looking at ---------- */
+  try {
+    const TILE_SPAN = 0.4, TILE_MAX = matchMedia('(pointer:coarse)').matches ? 9 : 14, NT = 260;
+    const centres = []; for (let i = 0; i < NT; i++) { const y = 1 - (i + 0.5) * 2 / NT, r = Math.sqrt(1 - y * y), ph = i * 2.399963; centres.push(new T.Vector3(Math.cos(ph) * r, y, Math.sin(ph) * r)); }
+    const tiles = new Map(), want = [], hw = navigator.hardwareConcurrency || 2;
+    const workers = []; for (let i = 0; i < Math.min(2, Math.max(1, hw - 1)); i++) { const wk = new Worker('planet-tile-worker.js'); wk.busy = null; workers.push(wk); }
+    const UPm = new T.Vector3(0, 1, 0);
+    function tileMesh(n) {
+      const uu = new T.Vector3().crossVectors(n, UPm).normalize(), ww = new T.Vector3().crossVectors(n, uu), Hh = Math.tan(TILE_SPAN / 2), M = 32, pos = [], uv = [], idx = [];
       for (let j = 0; j <= M; j++) for (let i = 0; i <= M; i++) {
-        const a = i / M * 2 - 1, b = j / M * 2 - 1, d = nz(n.clone().addScaledVector(uu, a * Hh).addScaledVector(ww, b * Hh));
-        pos.push(d.x * 1.0004, d.y * 1.0004, d.z * 1.0004); uv.push(i / M, 1 - j / M);
+        const d = n.clone().addScaledVector(uu, (i / M * 2 - 1) * Hh).addScaledVector(ww, (j / M * 2 - 1) * Hh).normalize();
+        pos.push(d.x * 1.0004, d.y * 1.0004, d.z * 1.0004); uv.push(i / M, j / M);
       }
       for (let j = 0; j < M; j++) for (let i = 0; i < M; i++) { const a = j * (M + 1) + i; idx.push(a, a + 1, a + M + 1, a + 1, a + M + 2, a + M + 1); }
       const g = new T.BufferGeometry(); g.setAttribute('position', new T.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new T.Float32BufferAttribute(uv, 2)); g.setIndex(idx); g.computeVertexNormals();
-      new T.TextureLoader().load('proto/patch.png', tex => {
-        tex.anisotropy = renderer.capabilities.getMaxAnisotropy(); tex.minFilter = T.LinearMipmapLinearFilter;
-        const m = new T.Mesh(g, new T.MeshLambertMaterial({ map: tex, transparent: true, depthWrite: false }));
-        m.renderOrder = 1; planetGroup.add(m); window.__patch = m;
-      });
+      return g;
+    }
+    function dropTile(t) { t.dead = true; if (t.mesh) { planetGroup.remove(t.mesh); t.mesh.geometry.dispose(); t.mesh.material.map.dispose(); t.mesh.material.dispose(); } tiles.delete(t.id); }
+    function gotTile(wk, m) {
+      const job = wk.busy; wk.busy = null; if (!job) return;
+      job.t.pending = 0;
+      const t = job.t; if (t.dead) return;
+      const tex = new T.DataTexture(new Uint8Array(m.data), m.res, m.res, T.RGBAFormat);
+      tex.minFilter = T.LinearMipmapLinearFilter; tex.magFilter = T.LinearFilter; tex.generateMipmaps = true; tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy()); tex.needsUpdate = true;
+      tex.onUpdate = () => { tex.image.data = null; };               // the picture now lives on the graphics card
+      if (t.mesh) { t.mesh.material.map.dispose(); t.mesh.material.map = tex; t.mesh.material.needsUpdate = true; }
+      else {
+        t.mesh = new T.Mesh(tileMesh(t.n), new T.MeshLambertMaterial({ map: tex, transparent: true, depthWrite: false, opacity: 0 }));
+        t.mesh.renderOrder = 1; t.mesh.frustumCulled = false; planetGroup.add(t.mesh); t.fade = 0;
+      }
+      t.res = m.res;
+    }
+    workers.forEach(wk => { wk.onmessage = e => gotTile(wk, e.data); wk.onerror = () => { wk.busy = null; }; });
+    let acc = 0, zoomF = 0;
+    tickers.push((tm, dt) => {
+      const dist = camera.position.length(), D = Math.max(0.05, dist - 1);
+      zoomF = dist < 1.62 ? 1 : dist > 1.8 ? 0 : 1 - (dist - 1.62) / 0.18;
+      for (const t of tiles.values()) { if (!t.mesh) continue; t.fade = Math.min(1, t.fade + dt * 2); t.mesh.material.opacity = t.fade * zoomF; t.mesh.visible = t.mesh.material.opacity > 0.01; }
+      acc += dt; if (acc < 0.3) return; acc = 0;
+      if (dist > 1.8) return;
+      const c = camera.position.clone().normalize(), tf = Math.tan(camera.fov * Math.PI / 360);
+      const pxRad = (innerHeight / 2) / (tf * D), reach = Math.min(Math.acos(Math.min(1, 1 / dist)), D * tf * Math.max(1, camera.aspect) * 1.2) + 0.15;
+      const list = centres.map((n, i) => ({ i, n, ang: Math.acos(Math.min(1, n.dot(c))) })).filter(o => o.ang < reach).sort((a, b) => a.ang - b.ang).slice(0, TILE_MAX);
+      const need = new Set(list.map(o => o.i));
+      for (const t of [...tiles.values()]) if (!need.has(t.id) && tiles.size > TILE_MAX && !t.pending) dropTile(t);
+      for (const o of list) {
+        const wr = pxRad > 2300 && o.ang < 0.22 ? 2048 : 1024; let t = tiles.get(o.i);
+        if (!t) { t = { id: o.i, n: o.n, res: 0, pending: 0, fade: 0, mesh: null }; tiles.set(o.i, t); }
+        if (t.res < wr && !t.pending) want.push({ t, wr, ang: o.ang });
+      }
+      want.sort((a, b) => a.ang - b.ang);
+      for (const wk of workers) if (!wk.busy && want.length) { const j = want.shift(); if (j.t.pending || j.t.res >= j.wr) continue; j.t.pending = j.wr; wk.busy = { id: j.t.id, t: j.t }; wk.postMessage({ seed: SEED, n: [j.t.n.x, j.t.n.y, j.t.n.z], span: TILE_SPAN, res: j.wr }); }
+      want.length = 0;
     });
-  }
+    window.__tiles = tiles;
+  } catch (e) { console.warn('detail tiles unavailable', e); }
   world = { P, cities, volcanoes, storms, boats, selectBoat, clearBoat, boatSelected: () => !!sel };
   if (new URLSearchParams(location.search).has('debug')) window.__np = { camera, controls, scene, planetGroup, boats, storms, volcanoes, cities, rail };
   const q = new URLSearchParams(location.search).get('go');   // e.g. ?go=volcano | volcano2 | storm | storm2 | city3 | boat2
-  if (q) setTimeout(() => { spinBtn.classList.remove('on');
+  if (q) setTimeout(() => { window.__noSpin = true;
     if (q.startsWith('boat')) { const b = boats[+q.slice(4)]; selectBoat(b); camera.position.copy(b.n).multiplyScalar(+(new URLSearchParams(location.search).get('d') || 1.7)); controls.update(); if (focus) focus.ease = 0; return; }
     const tgt = q === 'volcano' ? volcanoes[0] : q === 'volcano2' ? volcanoes[1] : q === 'volcano3' ? volcanoes[2] : q === 'storm' ? storms[0] : q === 'storm2' ? storms[1] : cities[+q.slice(4)];
     camera.position.copy(tgt.n).multiplyScalar(+(new URLSearchParams(location.search).get('d') || 1.8)); controls.update(); releaseFocus();
@@ -1626,11 +1674,6 @@ canvas.addEventListener('pointermove', e => {
   document.body.classList.toggle('pointer', !!pick(e));
 });
 
-const spinBtn = document.getElementById('spin');
-spinBtn.onclick = () => { const on = !spinBtn.classList.contains('on'); spinBtn.classList.toggle('on', on); spinBtn.textContent = on ? 'Spinning' : 'Paused'; };
-document.getElementById('placesBtn').onclick = e => { document.getElementById('places').classList.toggle('on'); e.currentTarget.classList.toggle('on'); };
-addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); spinBtn.click(); } });
-
 /* ---------- loop ---------- */
 function resize() {
   const w = innerWidth, h = innerHeight;
@@ -1645,7 +1688,7 @@ function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now; time += dt;
   starMat.uniforms.time.value = time;
   stepFocus(dt);
-  controls.autoRotate = spinBtn.classList.contains('on') && !focus;
+  controls.autoRotate = !focus && !window.__noSpin;
   controls.rotateSpeed = 0.25 + (camera.position.length() - 1.5) * 0.18;
   controls.update();
   for (const f of tickers) f(time, dt);
@@ -1663,7 +1706,7 @@ requestAnimationFrame(() => setTimeout(() => {
 <script>
 /* ---------- update checker: looks every 10 minutes, jiggles the button when a new version is out ---------- */
 (() => {
-  const FILES = ['index.html', 'planet-gen.js', 'planet-worker.js', 'manifest.webmanifest'];
+  const FILES = ['index.html', 'planet-gen.js', 'planet-worker.js', 'planet-tile.js', 'planet-tile-worker.js', 'manifest.webmanifest'];
   const btn = document.getElementById('updBtn'), msg = document.getElementById('updMsg');
   let base = null, avail = false, busy = false, lastCheck = 0, msgT = 0;
   const hash = t => { let h = 2166136261; for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36) + '.' + t.length; };
