@@ -1776,6 +1776,54 @@ function build() {
     }
   }
 
+  /* ---------- the frozen lake, poleward of Fizzlewick, and its trick-skating penguin ---------- */
+  {
+    const fz = cities.find(c => c.name === 'Fizzlewick');
+    if (fz) {
+      const poleSign = fz.n.y >= 0 ? 1 : -1;
+      // a clear, separate spot: not right on top of the town, and preferring an ideal "just beyond it" distance
+      const scoreOf = c => -Math.abs(angle(c.n, fz.n) - 0.22) * 1.6 - c.h * 0.4 + c.n.y * poleSign * 0.6;
+      let pool = cand.filter(c => c.b === 'ice' && angle(c.n, fz.n) > 0.08 && c.n.y * poleSign > fz.n.y * poleSign - 0.02);
+      if (!pool.length) pool = cand.filter(c => angle(c.n, fz.n) > 0.08 && c.n.y * poleSign > fz.n.y * poleSign + 0.03);   // fallback: just go poleward
+      if (!pool.length) pool = cand.filter(c => angle(c.n, fz.n) > 0.08);
+      let lake = null, lakeScore = -1e9;
+      for (const c of pool) { const s = scoreOf(c); if (s > lakeScore) { lakeScore = s; lake = c; } }
+      if (lake) {
+        const ln = lake.n.clone(), lS = K * 1.2;
+        const lg = new T.Group();
+        lg.add(withInk(new T.Mesh(new T.CircleGeometry(0.11 * lS, 36).rotateX(-Math.PI / 2), toon(0xd6f3ff, { transparent: true, opacity: 0.95 })), 1.04));
+        const rim = new T.Mesh(new T.RingGeometry(0.1 * lS, 0.115 * lS, 36).rotateX(-Math.PI / 2), toon(0xffffff)); rim.position.y = 0.0005; lg.add(rim);
+        for (let i = 0; i < 4; i++) { const a = rng() * 6.283, r = rng() * 0.08 * lS; const crack = new T.Mesh(new T.PlaneGeometry(0.002 * lS, (0.03 + rng() * 0.04) * lS), new T.MeshBasicMaterial({ color: 0xaee3f5, transparent: true, opacity: 0.5 })); crack.rotation.x = -Math.PI / 2; crack.rotation.z = rng() * 6.283; crack.position.set(Math.cos(a) * r, 0.0008, Math.sin(a) * r); lg.add(crack); }
+        placeOnSurface(lg, ln, 1.0, rng() * 6);
+        planetGroup.add(lg);
+        const lakeRef = { n: ln, li: 0, name: 'Frozen Lake' };
+        const hitM = new T.Mesh(new T.SphereGeometry(1, 8, 6), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+        hitM.position.copy(ln).multiplyScalar(1.01); hitM.scale.setScalar(0.13 * lS);
+        hitM.userData = { kind: 'lake', ref: lakeRef }; planetGroup.add(hitM); pickables.push(hitM);
+        addLabel('Frozen Lake', ln, 1 + 0.12 * lS + 0.05, 'lake', () => select('lake', lakeRef));
+
+        // the skater, forever practising its tricks
+        const pk = new T.Group();
+        pk.add(withInk(new T.Mesh(new T.SphereGeometry(1, 14, 10).scale(0.8, 1.15, 0.8), toon(0x1a1a22)), 1.1));
+        const belly = new T.Mesh(new T.SphereGeometry(1, 12, 8).scale(0.6, 0.85, 0.5), toon(0xffffff)); belly.position.set(0, -0.08, 0.28); pk.add(belly);
+        pk.add((() => { const b = new T.Mesh(new T.ConeGeometry(0.22, 0.5, 8).rotateX(Math.PI / 2), toon(0xff9a3d)); b.position.set(0, 0.55, 0.78); return b; })());
+        const wingL = new T.Mesh(new T.SphereGeometry(1, 8, 6).scale(0.22, 0.8, 0.4), toon(0x1a1a22)); wingL.position.set(-0.78, 0.1, 0); pk.add(wingL);
+        const wingR = wingL.clone(); wingR.position.x = 0.78; pk.add(wingR);
+        pk.scale.setScalar(0.012 * lS);
+        const skRoot = new T.Group(); skRoot.add(pk); placeOnSurface(skRoot, ln, 1.001, 0); planetGroup.add(skRoot);
+        const skR = 0.06 * lS, trickEvery = 7;
+        tickers.push(t => {
+          const lap = t * 0.6, trickPh = t % trickEvery, inTrick = trickPh < 1.4;
+          pk.position.set(Math.cos(lap) * skR, 0.003 * lS + (inTrick ? Math.max(0, Math.sin(trickPh / 1.4 * Math.PI)) * 0.045 * lS : 0), Math.sin(lap) * skR);
+          pk.rotation.y = -lap + Math.PI / 2 + (inTrick ? trickPh / 1.4 * Math.PI * 4 : 0);
+          pk.rotation.z = inTrick ? Math.sin(trickPh * 10) * 0.25 : Math.sin(lap * 2) * 0.1;
+          wingL.rotation.z = 0.6 + (inTrick ? Math.sin(trickPh * 14) * 0.6 : Math.sin(t * 4) * 0.2);
+          wingR.rotation.z = -0.6 - (inTrick ? Math.sin(trickPh * 14 + 1) * 0.6 : Math.sin(t * 4 + 1) * 0.2);
+        });
+      }
+    }
+  }
+
   /* ================================================================= AGES ================================================================= */
   let AGE = 'steam';
   const ageGroups = { modern: new T.Group(), space: new T.Group(), both: new T.Group() };     // things that only exist in later ages
