@@ -415,8 +415,24 @@ function build() {
   }
   fug2 = fug2 ? fug2.c : cand.find(c => angle(c.n, fugi.n) > 1.0) || cand[1];
 
+  /* Mount Chicken Nugget: about one Mount Fugi diameter from Mount Fugi, on dry land */
+  let nug = null;
+  {
+    const u = new T.Vector3().crossVectors(fugi.n, UP).normalize(), w = new T.Vector3().crossVectors(fugi.n, u), a0 = rng() * 6.28;
+    search: for (const f of [1.15, 1.3, 1.0, 1.5, 0.9, 1.8, 2.2]) {
+      const D = 0.36 * K * f;
+      for (let i = 0; i < 72; i++) {
+        const th = a0 + i * 0.0873, dir = u.clone().multiplyScalar(Math.cos(th)).addScaledVector(w, Math.sin(th));
+        const n = fugi.n.clone().multiplyScalar(Math.cos(D)).addScaledVector(dir, Math.sin(D)).normalize(), d = [n.x, n.y, n.z];
+        if (!P.isLand(d) || P.biome(d) === 'ice' || Math.abs(n.y) > 0.72 || !nearLand(d, 0.05)) continue;
+        nug = { n, d, h: P.relHeight(d) }; break search;
+      }
+    }
+    nug = nug || cand.filter(c => c.b !== 'ice' && angle(c.n, fugi.n) > 0.1).sort((a, b) => Math.abs(angle(a.n, fugi.n) - 0.17) - Math.abs(angle(b.n, fugi.n) - 0.17))[0];
+  }
+
   /* cities: farthest-point spread across all land */
-  const taken = [fugi.n, fug2.n];
+  const taken = [fugi.n, fug2.n, nug.n];
   const cityCand = cand.filter(c => c.b !== 'ice' && Math.abs(c.d[1]) < 0.72);   // no cities on the ice cap
   const cities = [];
   for (let i = 0; i < CITY_INFO.length; i++) {
@@ -587,7 +603,7 @@ function build() {
   const capGeos = [0, 1, 2].map(i => craggyCone(0.0145, 0.028, 11, 2, 0.4, i * 31 + 5));
   for (const c of sortedCand) {
     if (mtnN.length >= 320) break;
-    if (angle(c.n, fugi.n) < 0.18 || angle(c.n, fug2.n) < 0.12 || nearRail(c.n, 0.03)) continue;
+    if (angle(c.n, fugi.n) < 0.18 || angle(c.n, fug2.n) < 0.12 || angle(c.n, nug.n) < 0.1 || nearRail(c.n, 0.03)) continue;
     if (cities.some(k => angle(c.n, k.n) < 0.057)) continue;
     if (mtnN.some(m => angle(c.n, m) < 0.043 * RK)) continue;
     mtnN.push(c.n);
@@ -676,7 +692,7 @@ function build() {
       if (rng() > dens) continue;
       const n = v3(d);
       if (!nearLand(d, 0.008)) continue;
-      if (angle(n, fugi.n) < 0.09 || angle(n, fug2.n) < 0.04 || nearRail(n, 0.012)) continue;
+      if (angle(n, fugi.n) < 0.09 || angle(n, fug2.n) < 0.04 || angle(n, nug.n) < 0.065 || nearRail(n, 0.012)) continue;
       if (cities.some(k => angle(n, k.n) < 0.03) || mtnN.some(m => angle(n, m) < 0.023)) continue;
       const kind = b === 'desert' ? 'cact' : b === 'savanna' ? (rng() < 0.6 ? 'round' : 'cact') : (Math.abs(d[1]) > 0.62 || rng() < 0.4) ? 'pine' : 'round';
       list[kind].push({ n, b });
@@ -815,6 +831,80 @@ function build() {
   }
   const fugiV = makeVolcano(fugi.n, 1, 'Mount Fugi', 1 + 0.19 * K + 0.06);
   const fug2V = makeVolcano(fug2.n, 0.36, 'Little Fugette', 1 + 0.19 * K * 0.36 + 0.06);
+
+  /* ---------- Mount Chicken Nugget: a golden, crumb-coated mountain under a cloud that rains nuggets all day ---------- */
+  function makeNuggetMountain(site, name) {
+    const g = new T.Group(), sk = 0.5 * K;
+    const ctrl = [[0.19, 0], [0.16, 0.03], [0.125, 0.08], [0.09, 0.135], [0.055, 0.185], [0.025, 0.222], [0, 0.24]].map(p => new T.Vector2(p[0], p[1]));
+    const prof = new T.SplineCurve(ctrl).getPoints(30).map(p => new T.Vector2(Math.max(0, p.x), p.y)); prof[prof.length - 1].x = 0;
+    const geo = new T.LatheGeometry(prof, 40);
+    const c1 = new T.Color(0xb06a24), c2 = new T.Color(0xf0c25a), tmp = new T.Color(), car = new Float32Array(geo.attributes.position.count * 3);
+    for (let i = 0; i < geo.attributes.position.count; i++) {
+      const j = i % prof.length, seg = Math.floor(i / prof.length);
+      tmp.copy(c1).lerp(c2, prof[j].y / 0.24); if (seg % 5 < 1) tmp.multiplyScalar(0.92); tmp.toArray(car, i * 3);
+    }
+    geo.setAttribute('color', new T.BufferAttribute(car, 3));
+    const body = new T.Mesh(geo, toon(0xffffff, { vertexColors: true, side: T.DoubleSide }));
+    const ink = new T.Mesh(geo, inkMat); ink.scale.set(1.04, 1.015, 1.04); body.add(ink); g.add(body);
+    // the rain cloud
+    const cloud = new T.Group(); cloud.position.y = 0.58; cloud.scale.setScalar(0.72);
+    for (const [x, y, z, r] of [[0, 0, 0, 0.13], [0.13, -0.02, 0.03, 0.1], [-0.13, -0.01, 0, 0.105], [0.06, 0.03, -0.1, 0.09], [-0.06, 0.025, 0.1, 0.095], [0, 0.06, 0, 0.1]]) {
+      const puff = withInk(new T.Mesh(new T.SphereGeometry(r, 12, 9), toon(0xb4bdd2)), 1.1); puff.position.set(x, y, z); cloud.add(puff);
+    }
+    g.add(cloud);
+    // nuggets: lumpy, flat-shaded blobs
+    const ng = new T.IcosahedronGeometry(1, 1), pa = ng.attributes.position;
+    for (let i = 0; i < pa.count; i++) { const x = pa.getX(i), y = pa.getY(i), z = pa.getZ(i), j = 1 + 0.16 * Math.sin(x * 5.1 + y * 3.7) * Math.cos(z * 4.3 + x * 2.1); pa.setXYZ(i, x * 1.3 * j, y * 0.7 * j, z * 0.95 * j); }
+    ng.computeVertexNormals();
+    const NR = 64, NP = 36, NT = NR + NP;
+    const nm = new T.InstancedMesh(ng, toon(0xffffff), NT), ni = new T.InstancedMesh(ng, inkMat, NT);
+    nm.frustumCulled = ni.frustumCulled = false;
+    const nugCols = [0xe3a431, 0xd99528, 0xedb645, 0xcf8a24];
+    const groundY = r => { if (r >= prof[0].x) return 0; for (let i = 0; i < prof.length - 1; i++) if (prof[i + 1].x <= r) { const t = (r - prof[i].x) / Math.min(-1e-6, prof[i + 1].x - prof[i].x); return prof[i].y + (prof[i + 1].y - prof[i].y) * t; } return prof[prof.length - 1].y; };
+    const dm = new T.Object3D(), di = new T.Object3D();
+    const put = (i, x, y, z, rx, ry, rz, sz) => {
+      dm.position.set(x, y, z); dm.rotation.set(rx, ry, rz); dm.scale.setScalar(sz); dm.updateMatrix(); nm.setMatrixAt(i, dm.matrix);
+      di.position.copy(dm.position); di.rotation.copy(dm.rotation); di.scale.setScalar(sz * 1.22); di.updateMatrix(); ni.setMatrixAt(i, di.matrix);
+    };
+    const rain = [];
+    const spawn = (S, anywhere) => {
+      const a = Math.random() * 6.283, r = 0.03 + Math.sqrt(Math.random()) * 0.24;
+      S.x = Math.cos(a) * r; S.z = Math.sin(a) * r; S.r = r; S.sz = R(0.022, 0.034); S.g = groundY(r) + S.sz * 0.55;
+      S.y = anywhere ? S.g + Math.random() * (0.52 - S.g) : 0.46 - Math.random() * 0.04; S.vy = -R(0.22, 0.4); S.rest = 0;
+      S.rx = Math.random() * 6; S.ry = Math.random() * 6; S.rz = Math.random() * 6; S.wx = R(-3, 3); S.wz = R(-3, 3);
+    };
+    for (let i = 0; i < NR; i++) { const S = {}; spawn(S, true); rain.push(S); nm.setColorAt(i, tmp.set(nugCols[i % 4])); }
+    for (let i = 0; i < NP; i++) {     // nuggets already lying around the foot
+      const a = Math.random() * 6.283, r = 0.2 + Math.random() * 0.15, sz = R(0.022, 0.034), stack = i % 5 === 0;
+      put(NR + i, Math.cos(a) * r, sz * 0.55 + (stack ? sz * 0.8 : 0), Math.sin(a) * r, Math.random() * 0.4, Math.random() * 6, Math.random() * 0.4, sz);
+      nm.setColorAt(NR + i, tmp.set(nugCols[(i + 1) % 4]));
+    }
+    nm.instanceColor.needsUpdate = true;
+    g.add(nm, ni);
+    let boost = 0;
+    tickers.push((t, dt) => {
+      boost = Math.max(0, boost - dt);
+      const f = boost > 0 ? 1.7 : 1;
+      cloud.position.y = 0.58 + Math.sin(t * 0.8) * 0.008; cloud.rotation.y = t * 0.05;
+      for (let i = 0; i < NR; i++) {
+        const S = rain[i];
+        if (S.rest > 0) { S.rest -= dt * f; if (S.rest <= 0) spawn(S, false); }
+        else { S.y += S.vy * f * dt; S.rx += S.wx * dt; S.rz += S.wz * dt; if (S.y <= S.g) { S.y = S.g; S.rest = R(0.8, 1.8); S.rx = 0.2; S.rz = 0.2; } }
+        put(i, S.x, S.y, S.z, S.rx, S.ry, S.rz, S.sz);
+      }
+      nm.instanceMatrix.needsUpdate = ni.instanceMatrix.needsUpdate = true;
+    });
+    g.scale.setScalar(sk);
+    placeOnSurface(g, site, 0.995, rng() * 6);
+    planetGroup.add(g);
+    const hitM = new T.Mesh(new T.CylinderGeometry(0.12, 0.19, 0.24, 10).translate(0, 0.12, 0), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+    const V = { name, n: site.clone(), erupt: () => { boost = 5; } };      // a poke starts a proper downpour
+    hitM.userData = { kind: 'volcano', ref: V }; g.add(hitM); pickables.push(hitM);
+    addLabel(name, site, 1 + 0.6 * sk + 0.05, 'volcano', () => select('volcano', V));
+    volcanoes.push(V);
+    return V;
+  }
+  makeNuggetMountain(nug.n, 'Mount Chicken Nugget');
 
   /* ---------- storms ---------- */
   const storms = [];
@@ -1425,7 +1515,7 @@ function build() {
   const q = new URLSearchParams(location.search).get('go');   // e.g. ?go=volcano | volcano2 | storm | storm2 | city3 | boat2
   if (q) setTimeout(() => { spinBtn.classList.remove('on');
     if (q.startsWith('boat')) { const b = boats[+q.slice(4)]; selectBoat(b); camera.position.copy(b.n).multiplyScalar(+(new URLSearchParams(location.search).get('d') || 1.7)); controls.update(); if (focus) focus.ease = 0; return; }
-    const tgt = q === 'volcano' ? volcanoes[0] : q === 'volcano2' ? volcanoes[1] : q === 'storm' ? storms[0] : q === 'storm2' ? storms[1] : cities[+q.slice(4)];
+    const tgt = q === 'volcano' ? volcanoes[0] : q === 'volcano2' ? volcanoes[1] : q === 'volcano3' ? volcanoes[2] : q === 'storm' ? storms[0] : q === 'storm2' ? storms[1] : cities[+q.slice(4)];
     camera.position.copy(tgt.n).multiplyScalar(+(new URLSearchParams(location.search).get('d') || 1.8)); controls.update(); releaseFocus();
     if (tgt.erupt) tgt.erupt(); else if (tgt.zap) tgt.zap(); }, 200);
   console.log('Nathaniel Planet built', { cities: cities.map(c => [c.name, c.biome]), mountains: mtnN.length, volcanoes: volcanoes.length, storms: storms.length, boats: boats.length, whales: whales.length, trains: boats.filter(b => b.rail).length, railEdges: rail.edges.length });
@@ -1462,7 +1552,8 @@ document.getElementById('cardX').onclick = () => { card.classList.remove('on'); 
 
 const VOLCANO_LINES = [
   ['Mount Fugi is huge, grumpy, and erupts when poked. You just poked it.', 'KABOOM! Mount Fugi says it was only clearing its throat.', 'Mount Fugi has erupted 3,000 times. It still finds it exciting.'],
-  ['Little Fugette is tiny, but she has big feelings. Pop!', 'Pfft! Little Fugette says she is NOT a baby Fugi. She is a Fugette.', 'Little Fugette erupts every afternoon at four, politely, for tea.']];
+  ['Little Fugette is tiny, but she has big feelings. Pop!', 'Pfft! Little Fugette says she is NOT a baby Fugi. She is a Fugette.', 'Little Fugette erupts every afternoon at four, politely, for tea.'],
+  ['Mount Chicken Nugget has rained nuggets every single day for 900 years. Nobody has ever complained.', 'Splat! A downpour! The weather forecast was "mostly golden, with a chance of dipping sauce".', 'Local legend says the cloud is made of steam from one enormous fryer. Local legend has not been checked.']];
 let lineI = 0;
 function select(kind, c) {
   let n, dist = 1.6;
