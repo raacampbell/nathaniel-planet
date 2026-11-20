@@ -64,11 +64,8 @@
     background:none;border:0;border-radius:10px;padding:7px 10px;cursor:pointer}
   #places button:hover{background:#3b1fa3}
   #places .sec{font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--dim);padding:6px 10px 2px}
-  #hint{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);color:var(--dim);font-size:13px;pointer-events:none;
-    text-align:center;white-space:nowrap}
   #loading{touch-action:none;position:fixed;inset:0;display:grid;place-items:center;background:#000005;font-size:22px;z-index:9;transition:opacity .6s}
   body.pointer canvas#c{cursor:pointer}
-  @media(max-width:560px){#hint{white-space:normal;width:90%}}
 </style>
 </head>
 <body>
@@ -82,7 +79,6 @@
   <div id="updMsg"></div>
 <div id="places"></div>
 <div id="card"><button id="cardX" aria-label="close">×</button><h2></h2><p></p></div>
-<div id="hint">drag to spin · scroll or pinch to zoom · click cities, boats, trains, volcanoes and storms</div>
 <div id="loading">Making a planet…</div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
@@ -211,7 +207,9 @@ const labels = [];
 const tickers = [];   // functions(t, dt)
 // The globe is now 1.5x wider again (radius x 2.12 in total). The scene is kept in unit-sphere
 // coordinates, so every object on it is shrunk by K: cities, ships etc. stay the size they were.
-const K = Math.SQRT1_2 / 1.5;
+const GROW = 1.25;                          // globe area x1.5625 on top of the 1.5x-wide planet (two +25% steps)
+const RK = 1 / GROW;                           // size factor for things not scaled by K (track, town squares)
+const K = Math.SQRT1_2 / 1.5 * RK;
 
 /* merge many small static meshes into two draw calls (coloured + ink outline) */
 function mergeParts(parts) {            // parts: [[geometry, THREE.Color], ...] -> vertex-coloured, non-indexed
@@ -520,7 +518,7 @@ function build() {
         for (let i = 0; i < pts.length - 1; i++) for (let k = 0; k < 4; k++) { const q = pts[i].clone().lerp(pts[i + 1], k / 4).normalize(); if (!P.isLand([q.x, q.y, q.z]) || Math.abs(q.y) > 0.76) return false; }
         return true;
       };
-      const CITY_R = 0.036;
+      const CITY_R = 0.036 * RK;
       for (const L of links) {
         const A = rc[L.i], B = rc[L.j], cells = []; for (let k = B.k; k !== -1; k = A.dj.prev[k]) cells.push(k); cells.reverse();
         const base = [A.c.n.clone(), ...cells.map(k => new T.Vector3(gDir[k * 3], gDir[k * 3 + 1], gDir[k * 3 + 2])), B.c.n.clone()];
@@ -531,7 +529,17 @@ function build() {
           if (landOnly(q)) { pts = q; break; }
         }
         let r = resamplePts(pts, 0.004);
-        { const q = relaxCurves(r, 0.004, 0.085, 4000, c => P.isLand([c.x, c.y, c.z]) && Math.abs(c.y) < 0.76); if (landOnly(q)) r = q; }   // no tight bends for the big trains
+        {   // allow the track to shave a coastline by a hair (beach), but never wander out to sea
+          const u0 = new T.Vector3(), w0 = new T.Vector3(), q0 = new T.Vector3();
+          const okFor = tol => c => {
+            if (Math.abs(c.y) > 0.76) return false; if (P.isLand([c.x, c.y, c.z])) return true;
+            u0.crossVectors(c, Math.abs(c.y) > 0.9 ? new T.Vector3(1, 0, 0) : UP).normalize(); w0.crossVectors(c, u0);
+            for (let k = 0; k < 4; k++) { const th = k * 1.5708; q0.copy(c).addScaledVector(u0, Math.cos(th) * tol).addScaledVector(w0, Math.sin(th) * tol); if (P.isLand([q0.x, q0.y, q0.z])) return true; }
+            return false;
+          };
+          r = relaxCurves(r, 0.004, 0.085 * RK, 4000, okFor(0.004));
+          r = relaxCurves(r, 0.004, 0.075 * RK, 6000, okFor(0.014));      // stubborn bends: allow a little more beach
+        }   // no tight bends for the big trains
         r = r.filter(p => angle(p, A.c.n) > CITY_R && angle(p, B.c.n) > CITY_R);          // stop at the edge of each town square
         if (r.length < 6) continue;
         rail.edges.push({ a: A.c, b: B.c, pts: r });
@@ -545,7 +553,7 @@ function build() {
       const quad = (a, b, c, d, n, color) => { // a,b,c,d are Vector3 (CCW from outside)
         for (const p of [a, b, c, a, c, d]) { pos.push(p.x, p.y, p.z); nor.push(n.x, n.y, n.z); tmpC.set(color); col.push(tmpC.r, tmpC.g, tmpC.b); }
       };
-      const _t = new T.Vector3(), _s = new T.Vector3(), _p0 = new T.Vector3(), _p1 = new T.Vector3(), _q = (n, r, s, w) => n.clone().multiplyScalar(r).addScaledVector(s, w);
+      const _t = new T.Vector3(), _s = new T.Vector3(), _p0 = new T.Vector3(), _p1 = new T.Vector3(), _q = (n, r, s, w) => n.clone().multiplyScalar(r).addScaledVector(s, w * RK);
       for (const e of rail.edges) {
         const pts = e.pts, ss = pts.map((p, i) => { const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)]; _t.copy(b).sub(a); _t.addScaledVector(p, -_t.dot(p)).normalize(); return new T.Vector3().crossVectors(p, _t).normalize(); });
         const ribbon = (r, off, w, color) => { for (let i = 0; i < pts.length - 1; i++) {
@@ -559,7 +567,7 @@ function build() {
           const a = pts[i], b = pts[i + 1], sa = ss[i], sb = ss[i + 1], m = a.clone().add(b).normalize(), sm = sa.clone().add(sb).normalize(), len = angle(a, b) * 0.28;
           const tt = b.clone().sub(a).normalize().multiplyScalar(len);
           const c1 = m.clone().multiplyScalar(1.0017);
-          quad(c1.clone().addScaledVector(sm, -0.0052).addScaledVector(tt, -1), c1.clone().addScaledVector(sm, 0.0052).addScaledVector(tt, -1), c1.clone().addScaledVector(sm, 0.0052).addScaledVector(tt, 1), c1.clone().addScaledVector(sm, -0.0052).addScaledVector(tt, 1), m, 0x6b4423);
+          quad(c1.clone().addScaledVector(sm, -0.0052 * RK).addScaledVector(tt, -1), c1.clone().addScaledVector(sm, 0.0052 * RK).addScaledVector(tt, -1), c1.clone().addScaledVector(sm, 0.0052 * RK).addScaledVector(tt, 1), c1.clone().addScaledVector(sm, -0.0052 * RK).addScaledVector(tt, 1), m, 0x6b4423);
         }
       }
       const geo = new T.BufferGeometry();
@@ -578,10 +586,10 @@ function build() {
   const mtnGeos = [0, 1, 2].map(i => craggyCone(0.03, 0.055, 11, 3, 0.35, i * 17));
   const capGeos = [0, 1, 2].map(i => craggyCone(0.0145, 0.028, 11, 2, 0.4, i * 31 + 5));
   for (const c of sortedCand) {
-    if (mtnN.length >= 230) break;
+    if (mtnN.length >= 320) break;
     if (angle(c.n, fugi.n) < 0.18 || angle(c.n, fug2.n) < 0.12 || nearRail(c.n, 0.03)) continue;
     if (cities.some(k => angle(c.n, k.n) < 0.057)) continue;
-    if (mtnN.some(m => angle(c.n, m) < 0.043)) continue;
+    if (mtnN.some(m => angle(c.n, m) < 0.043 * RK)) continue;
     mtnN.push(c.n);
     const cluster = 1 + Math.floor(rng() * 3);
     const u = new T.Vector3().crossVectors(c.n, UP).normalize(), w = new T.Vector3().crossVectors(c.n, u);
@@ -659,7 +667,7 @@ function build() {
     const pineGeo = mergeParts([[trunk(), gcol(0x6b4226)], [new T.ConeGeometry(0.0125, 0.017, 8).translate(0, 0.0185, 0), gcol(0x2f8f4a)], [new T.ConeGeometry(0.0095, 0.015, 8).translate(0, 0.0295, 0), gcol(0x3aa557)], [new T.ConeGeometry(0.006, 0.012, 8).translate(0, 0.039, 0), gcol(0x4cbf68)]]);
     const cactGeo = mergeParts([[new T.CylinderGeometry(0.0034, 0.0038, 0.022, 8).translate(0, 0.011, 0), gcol(0x4ea35a)], [new T.CylinderGeometry(0.0022, 0.0022, 0.008, 6).rotateZ(Math.PI / 2).translate(0.0055, 0.012, 0), gcol(0x4ea35a)], [new T.CylinderGeometry(0.0022, 0.0022, 0.007, 6).translate(0.0085, 0.0155, 0), gcol(0x4ea35a)]]);
     const list = { round: [], pine: [], cact: [] };
-    for (let i = 0; i < 36000 && list.round.length + list.pine.length + list.cact.length < 4800; i++) {
+    for (let i = 0; i < 50000 && list.round.length + list.pine.length + list.cact.length < 6500; i++) {
       const d = P.randomDir(rng); if (!P.isLand(d)) continue;
       const b = P.biome(d), h = P.relHeight(d);
       if (h > 0.5) continue;
@@ -894,7 +902,7 @@ function build() {
     storms.push(St);
     return St;
   }
-  const RAD1 = 0.2 * K, RAD2 = 0.085 / 1.5;
+  const RAD1 = 0.2 * K, RAD2 = 0.085 / 1.5 * RK;
   const s1d = findStorm(RAD1, 0.22, 0.55, []) || [0.5, 0.35, 0.8];
   const storm1 = makeStorm('Hurricane Nanette', v3(s1d).normalize(), RAD1, 3,
     ['Zap! Hurricane Nanette is not amused.', 'Boom! It has been spinning for 900 years and is very dizzy.', 'Crackle! Nobody dares go near it, except one small boat.']);
@@ -1190,7 +1198,7 @@ function build() {
     const pairs = [];
     for (let i = 0; i < rail.cities.length; i++) for (let j = i + 1; j < rail.cities.length; j++) {
       const st = treePath(rail.cities[i], rail.cities[j]); if (!st) continue;
-      const pts = resamplePts(relaxCurves(resamplePts(stepsPts(st), 0.004), 0.004, 0.06, 3000), SPACING); pairs.push({ A: rail.cities[i], B: rail.cities[j], pts, L: (pts.length - 1) * SPACING });
+      const pts = resamplePts(relaxCurves(resamplePts(stepsPts(st), 0.004), 0.004, 0.06 * RK, 3000), SPACING); pairs.push({ A: rail.cities[i], B: rail.cities[j], pts, L: (pts.length - 1) * SPACING });
     }
     pairs.sort((a, b) => b.L - a.L);
     const useCount = new Map(), chosen = [];
