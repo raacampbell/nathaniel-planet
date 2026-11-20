@@ -296,7 +296,7 @@ body.invading #invAlert{opacity:1}
       const tgt = target || cities[cityI++ % cities.length];
       const home = tgt.n.clone();
       const from = home.clone().add(rv(1.2)).normalize().multiplyScalar(4.5);
-      const sc = { ...S, role, tgt, home, alt: R(1.075, 1.1), state: 'arrive', t: 0, from, pos: from.clone(), hp: 7 + Math.random() * 4, fire: R(0.5, 1.5), drift: Math.random() * 6, n: new T.Vector3(), id: saucers.length };
+      const sc = { ...S, role, tgt, home, alt: R(1.075, 1.1), state: 'arrive', t: 0, from, pos: from.clone(), hp: 7 + Math.random() * 4, fire: R(0.5, 1.5), drift: Math.random() * 6, n: new T.Vector3(), id: saucers.length, roam: R(9, 16) };
       saucers.push(sc); return sc;
     }
     function saucerHome(sc, t) {
@@ -387,6 +387,13 @@ body.invading #invAlert{opacity:1}
               beam(_a, p, 0xff1a1a, 0.0044, 0.4); explode(p, 0.5, false);
               if (Math.random() < 0.85) addFire(p, R(30, 70), R(0.7, 1.4));
               if (!s.tgt._ignited) { s.tgt._ignited = true; for (let k = 0; k < 3; k++) addFire(cityTarget(s.tgt), R(45, 95), R(0.6, 1.3)); }
+            }
+            s.roam -= dt;
+            if (s.roam <= 0 && phase !== 'retreat') {
+              let next = cities[Math.floor(Math.random() * cities.length)];
+              if (cities.length > 1) { let tries = 0; while (next === s.tgt && tries++ < 5) next = cities[Math.floor(Math.random() * cities.length)]; }
+              s.tgt = next; s.home = next.n.clone(); s.from = s.pos.clone(); s.state = 'arrive'; s.t = 0; s.roam = R(9, 16);
+              if (Math.random() < 0.4) caption(`A saucer zooms off to attack ${next.name}!`);
             }
           } else if (s.role === 'bbq') {
             s.fire -= dt;
