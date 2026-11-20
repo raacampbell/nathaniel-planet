@@ -1712,6 +1712,70 @@ function build() {
     }
   }
 
+  /* ---------- Mount Sundae: a polar glacier of vanilla ice cream, an angry penguin, and the goats that nibble it ---------- */
+  {
+    const floodFill2 = landOk => {
+      const comp = new Int32Array(GN).fill(-1), areas = [];
+      for (let s = 0; s < GN; s++) {
+        if (!landOk(s) || comp[s] >= 0) continue;
+        const id = areas.length; let a = 0; const st = [s]; comp[s] = id;
+        while (st.length) { const k = st.pop(); a += Math.sqrt(1 - gDir[k * 3 + 1] ** 2); neighbours(k, q => { if (landOk(q) && comp[q] < 0) { comp[q] = id; st.push(q); } }); }
+        areas.push(a);
+      }
+      return { comp, areas };
+    };
+    const polarFF = floodFill2(k => gLand[k] && gIce[k]);
+    if (polarFF.areas.length) {
+      const polarBig = polarFF.areas.indexOf(Math.max(...polarFF.areas));
+      let peak = -1, peakH = -1;
+      for (let k = 0; k < GN; k++) if (polarFF.comp[k] === polarBig && gH[k] > peakH) { peakH = gH[k]; peak = k; }
+      const site = new T.Vector3(gDir[peak * 3], gDir[peak * 3 + 1], gDir[peak * 3 + 2]), [gu, gw] = perpFrame(site), gS = K * 1.35;
+      const onMtn = (ang, r) => site.clone().multiplyScalar(Math.cos(r)).addScaledVector(gu.clone().multiplyScalar(Math.cos(ang)).addScaledVector(gw, Math.sin(ang)), Math.sin(r)).normalize();
+
+      const g = new T.Group();
+      g.add(withInk(new T.Mesh(craggyCone(0.075, 0.13, 14, 4, 0.3, (peak * 2654435761) >>> 0), toon(0x9a8c9e)), 1.08));
+      const cap = new T.Mesh(craggyCone(0.04, 0.05, 12, 3, 0.35, (peak * 40503 + 1) >>> 0), toon(0xfdf3d8)); cap.position.y = 0.088; g.add(cap);
+      for (let i = 0; i < 5; i++) {
+        const a = i / 5 * 6.283, drip = new T.Mesh(new T.CylinderGeometry(0.003, 0.0015, 0.035 + rng() * 0.02, 6), toon(0xfdf0cc));
+        drip.position.set(Math.cos(a) * 0.028, 0.072, Math.sin(a) * 0.028); drip.rotation.z = Math.cos(a) * 0.35; drip.rotation.x = Math.sin(a) * 0.35; g.add(drip);
+      }
+      g.scale.setScalar(gS);
+      placeOnSurface(g, site, 0.995, rng() * 6);
+      planetGroup.add(g);
+      const glacierRef = { n: site, li: 0, name: 'Mount Sundae' };
+      const hitM = new T.Mesh(new T.SphereGeometry(1, 8, 6), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+      hitM.position.copy(site).multiplyScalar(1.03); hitM.scale.setScalar(0.17 * gS);
+      hitM.userData = { kind: 'glacier', ref: glacierRef }; planetGroup.add(hitM); pickables.push(hitM);
+      addLabel('Mount Sundae', site, 1 + 0.2 * gS + 0.06, 'glacier', () => select('glacier', glacierRef));
+
+      // the furious penguin, self-appointed guardian of the ice cream
+      const pgRoot = new T.Group();
+      pgRoot.add(withInk(new T.Mesh(new T.SphereGeometry(1, 14, 10).scale(0.8, 1.15, 0.8), toon(0x1a1a22)), 1.1));
+      const belly = new T.Mesh(new T.SphereGeometry(1, 12, 8).scale(0.6, 0.85, 0.5), toon(0xffffff)); belly.position.set(0, -0.08, 0.28); pgRoot.add(belly);
+      pgRoot.add((() => { const b = new T.Mesh(new T.ConeGeometry(0.22, 0.5, 8).rotateX(Math.PI / 2), toon(0xff9a3d)); b.position.set(0, 0.55, 0.78); return b; })());
+      const wingL = new T.Mesh(new T.SphereGeometry(1, 8, 6).scale(0.22, 0.8, 0.4), toon(0x1a1a22)); wingL.position.set(-0.78, 0.1, 0); pgRoot.add(wingL);
+      const wingR = wingL.clone(); wingR.position.x = 0.78; pgRoot.add(wingR);
+      for (const s of [-1, 1]) { const brow = new T.Mesh(new T.BoxGeometry(0.4, 0.08, 0.06), new T.MeshBasicMaterial({ color: 0x0a0a10 })); brow.position.set(s * 0.26, 0.76, 0.68); brow.rotation.z = -s * 0.5; pgRoot.add(brow); }
+      pgRoot.scale.setScalar(0.014 * gS);
+      placeOnSurface(pgRoot, onMtn(rng() * 6.283, 0.022), 1.004, 0);
+      planetGroup.add(pgRoot);
+      tickers.push(t => { pgRoot.rotation.z = Math.sin(t * 15) * 0.08; wingL.rotation.z = 0.5 + Math.sin(t * 9) * 0.5; wingR.rotation.z = -0.5 - Math.sin(t * 9 + 1) * 0.5; });
+
+      // the mountain goats, nibbling vanilla off the peaks
+      const goatBody = new T.SphereGeometry(1, 10, 8).scale(1.5, 0.8, 1), goats = [];
+      for (let i = 0; i < 5; i++) {
+        const gp = onMtn(rng() * 6.283, 0.012 + rng() * 0.022), gg = new T.Group();
+        const torso = withInk(new T.Mesh(goatBody, toon(0xe8e2d0)), 1.15); torso.scale.set(0.012, 0.0096, 0.012); gg.add(torso);
+        const head = new T.Mesh(new T.SphereGeometry(0.0055, 10, 8), toon(0xe8e2d0)); head.position.set(0.016, 0.004, 0); gg.add(head);
+        for (const s of [-1, 1]) { const horn = new T.Mesh(new T.ConeGeometry(0.0013, 0.007, 6), toon(0x6b5a46)); horn.position.set(0.018, 0.009, s * 0.0028); horn.rotation.x = -0.4; horn.rotation.z = s * 0.3; gg.add(horn); }
+        for (const [lx, lz] of [[-0.006, -0.004], [-0.006, 0.004], [0.006, -0.004], [0.006, 0.004]]) { const leg = new T.Mesh(new T.CylinderGeometry(0.0013, 0.0013, 0.01, 6), toon(0xd8d0ba)); leg.position.set(lx, -0.008, lz); gg.add(leg); }
+        gg.scale.setScalar(gS); placeOnSurface(gg, gp, 1.0, rng() * 6); planetGroup.add(gg);
+        goats.push({ head, ph: rng() * 6.283 });
+      }
+      tickers.push(t => { for (const gt of goats) gt.head.position.y = 0.004 + Math.max(0, Math.sin(t * 2.2 + gt.ph)) * 0.003; });
+    }
+  }
+
   /* ================================================================= AGES ================================================================= */
   let AGE = 'steam';
   const ageGroups = { modern: new T.Group(), space: new T.Group(), both: new T.Group() };     // things that only exist in later ages
