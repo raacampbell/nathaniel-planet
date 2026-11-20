@@ -2078,7 +2078,7 @@ function frame(now) {
   starMat.uniforms.time.value = time;
   stepFocus(dt);
   controls.autoRotate = !focus && !window.__noSpin;
-  { const dd = camera.position.length(); controls.rotateSpeed = Math.max(0.03, 0.25 + (dd - 1.5) * 0.18) * Math.min(1, (dd - 1) / 0.45); controls.zoomSpeed = Math.max(0.12, 2.4 * (dd - 1) / dd); }
+  { const dd = camera.position.length(); controls.rotateSpeed = Math.max(0.03, 0.25 + (dd - 1.5) * 0.18) * Math.min(1, (dd - 1) / 0.45); controls.zoomSpeed = Math.max(0.06, 1.2 * (dd - 1) / dd); }
   controls.update();
   baseCam.copy(camera.position); baseQuat.copy(camera.quaternion);
   applyTilt(); camera.updateMatrixWorld(); tiltedMat.copy(camera.matrixWorld);   // the tilted pose is only for drawing, labels and picking
