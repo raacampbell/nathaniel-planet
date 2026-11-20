@@ -1,6 +1,6 @@
 {
   "name": "Nathaniel Planet",
-  "short_name": "Nathaniel",
+  "short_name": "Nathaniel Planet",
   "description": "Anton's vision of another world: a tiny spinning cartoon planet with cities, ships, volcanoes and storms.",
   "start_url": "./index.html",
   "scope": "./",
