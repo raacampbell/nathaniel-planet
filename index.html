@@ -44,10 +44,6 @@
   #card h2{margin:0 0 4px;font-size:20px;color:var(--accent)}
   #card p{margin:0;font-size:15px;line-height:1.35}
   #card button{position:absolute;right:10px;top:8px;background:none;border:0;color:var(--dim);font:inherit;font-size:20px;cursor:pointer}
-  #tilt{position:fixed;left:20px;top:96px;display:flex;flex-direction:column;gap:8px}
-  #tilt .btn.round{background:#1b1040b3;border-color:var(--edge);color:#fff;backdrop-filter:blur(4px)}
-  #tilt .btn.round:hover{background:#3b1fa3}
-  #tilt .btn.round:disabled{opacity:.35;cursor:default}
   #bar{position:fixed;right:14px;top:calc(env(safe-area-inset-top,0px) + 14px);display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
   .btn{font:inherit;font-size:14px;color:var(--txt);background:#1b1040cc;border:2px solid var(--edge);
     border-radius:999px;padding:7px 14px;cursor:pointer;backdrop-filter:blur(4px)}
@@ -79,10 +75,6 @@
 <body>
 <canvas id="c"></canvas>
 <div id="title"><h1>Nathaniel Planet</h1><p>Anton's vision of another world</p></div>
-<div id="tilt">
-  <button class="btn round" id="tiltUp" aria-label="Look further toward the horizon" title="Tilt the view"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg></button>
-  <button class="btn round" id="tiltDown" aria-label="Look straight down" title="Look straight down"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
-</div>
 <div id="bar">
   <button class="btn round" id="cityBtn" aria-label="Cities" title="Cities"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21V12l4-3 4 3v9"/><path d="M11 21V8h5v13"/><path d="M16 21v-7h5v7"/><path d="M13.5 8V3.5l3 1.2-3 1.2"/><path d="M2 21h20"/></svg></button>
   <button class="btn round" id="wonderBtn" aria-label="Wonders" title="Wonders"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21l6.5-12h5L21 21z"/><path d="M12 6V2.5M8.5 5L6.5 2.5M15.5 5l2-2.5"/></svg></button>
@@ -1691,24 +1683,23 @@ function resize() {
 addEventListener('resize', resize); resize();
 
 let last = performance.now(), time = 0;
-/* view tilt: the camera orbits the planet looking straight down at whatever is in the middle; the tilt buttons swing it
-   round that middle point toward the horizon. controls keep working on the untilted ("base") pose. */
+/* view tilt: the camera orbits the planet looking straight down at whatever is in the middle. Zoom in and it eases
+   round that middle point to an angled view (about 34 degrees off straight-down); zoom out and it returns to straight down.
+   Controls keep working on the untilted ("base") pose. */
 const baseCam = new T.Vector3(), lastTilted = new T.Vector3(), viewDir = new T.Vector3(0, 0, 1);
-let tilt = 0, tiltCur = 0, baseDist = 3;
-const TILT_MAX = 1.15, TILT_STEP = 0.2;
-const tiltUp = document.getElementById('tiltUp'), tiltDown = document.getElementById('tiltDown');
-function setTilt(v) { tilt = Math.min(TILT_MAX, Math.max(0, v)); tiltUp.disabled = tilt >= TILT_MAX - 1e-6; tiltDown.disabled = tilt <= 1e-6; }
-tiltUp.onclick = () => setTilt(tilt + TILT_STEP); tiltDown.onclick = () => setTilt(tilt - TILT_STEP); setTilt(0);
+let tiltCur = 0, baseDist = 3;
+const TILT = 0.6, ZOOM_FULL = 1.55, ZOOM_NONE = 2.5;
 const _tq = new T.Quaternion(), _tr = new T.Vector3(), _to = new T.Vector3();
-function applyTilt(dt) {
-  tiltCur += (tilt - tiltCur) * (1 - Math.exp(-dt * 6));
+function applyTilt() {
   baseDist = baseCam.length(); viewDir.copy(baseCam).normalize();
-  const zf = 1 - Math.min(1, Math.max(0, (baseDist - 2.0) / 1.2)), th = tiltCur * zf;
-  _tr.crossVectors(UP, viewDir);
-  if (th > 1e-3 && _tr.lengthSq() > 1e-6) {
-    _tr.normalize(); _tq.setFromAxisAngle(_tr, th);
+  const t = Math.min(1, Math.max(0, (baseDist - ZOOM_FULL) / (ZOOM_NONE - ZOOM_FULL)));
+  tiltCur = TILT * (1 - t * t * (3 - 2 * t));
+  if (tiltCur > 1e-4) {
+    _tr.set(1, 0, 0).applyQuaternion(camera.quaternion);                  // the camera's own screen-right: well defined even over the poles
+    _tq.setFromAxisAngle(_tr, tiltCur);
     _to.copy(baseCam).sub(viewDir).applyQuaternion(_tq);
-    camera.position.copy(viewDir).add(_to); camera.lookAt(viewDir);
+    camera.position.copy(viewDir).add(_to);
+    camera.quaternion.premultiply(_tq);
   }
   lastTilted.copy(camera.position);
 }
@@ -1721,7 +1712,7 @@ function frame(now) {
   controls.autoRotate = !focus && !window.__noSpin;
   controls.rotateSpeed = 0.25 + (camera.position.length() - 1.5) * 0.18;
   controls.update();
-  baseCam.copy(camera.position); applyTilt(dt);
+  baseCam.copy(camera.position); applyTilt(); camera.updateMatrixWorld();   // matrices must match the tilted pose for labels and picking
   for (const f of tickers) f(time, dt);
   updateLabels();
   renderer.render(scene, camera);
