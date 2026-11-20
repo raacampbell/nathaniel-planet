@@ -14,7 +14,8 @@
 #alienBtn span{position:absolute;left:62px;bottom:14px;white-space:nowrap;font:600 13px var(--font);color:#ffd2d2;text-shadow:0 1px 3px #000}
 #alienBtn{animation:abtn 1.6s ease-in-out infinite}
 @keyframes abtn{50%{transform:scale(1.07)}}
-body:not([data-age="space"]) #alienBtn, body.invading #alienBtn, body.invading #ageBtn{display:none}
+body:not([data-age="space"]) #alienBtn{opacity:.35;filter:grayscale(1) drop-shadow(0 3px 6px #000a);cursor:default;animation:none}
+body.invading #alienBtn, body.invading #ageBtn{display:none}
 .inv-ov{position:fixed;inset:0;z-index:60;display:grid;place-items:center;background:radial-gradient(circle,#3a0000cc,#000e);font-family:var(--font);color:#fff;animation:invfade .3s}
 @keyframes invfade{from{opacity:0}}
 .inv-tape{position:absolute;left:-10%;width:120%;height:46px;background:repeating-linear-gradient(-45deg,#ffd400 0 34px,#111 34px 68px);box-shadow:0 0 18px #000;display:flex;align-items:center;justify-content:center;
