@@ -48,6 +48,15 @@
   .btn{font:inherit;font-size:14px;color:var(--txt);background:#1b1040cc;border:2px solid var(--edge);
     border-radius:999px;padding:7px 14px;cursor:pointer;backdrop-filter:blur(4px)}
   .btn:hover,.btn.on{background:#3b1fa3}
+  .btn.round{position:fixed;right:14px;bottom:14px;z-index:21;width:38px;height:38px;padding:0;display:grid;place-items:center;background:transparent;backdrop-filter:none;border-color:#ffffff66;color:#ffffffcc}
+  .btn.round:hover{background:#ffffff26}
+  .btn.round svg{display:block}
+  .btn.round.checking svg{animation:updspin .9s linear infinite}
+  .btn.round.avail{border-color:var(--accent);color:var(--accent);animation:updjiggle 2.6s ease-in-out infinite}
+  @keyframes updspin{to{transform:rotate(360deg)}}
+  @keyframes updjiggle{0%,45%,100%{transform:rotate(0)}8%{transform:rotate(-13deg)}16%{transform:rotate(11deg)}24%{transform:rotate(-8deg)}32%{transform:rotate(5deg)}40%{transform:rotate(-2deg)}}
+  #updMsg{position:fixed;right:60px;bottom:19px;z-index:21;font-size:13px;padding:4px 12px;border-radius:999px;background:var(--card);border:2px solid var(--edge);opacity:0;transition:opacity .3s;pointer-events:none}
+  #updMsg.on{opacity:1}
   #places{position:fixed;right:14px;top:62px;width:210px;max-height:calc(100% - 140px);overflow:auto;
     background:var(--card);border:2px solid var(--edge);border-radius:16px;padding:8px;display:none}
   #places.on{display:block}
@@ -69,6 +78,8 @@
   <button class="btn on" id="spin">Spinning</button>
   <button class="btn" id="placesBtn">Places</button>
 </div>
+<button class="btn round" id="updBtn" aria-label="Check for updates" title="Check for updates"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg></button>
+  <div id="updMsg"></div>
 <div id="places"></div>
 <div id="card"><button id="cardX" aria-label="close">×</button><h2></h2><p></p></div>
 <div id="hint">drag to spin · scroll or pinch to zoom · click cities, boats, trains, volcanoes and storms</div>
@@ -1279,7 +1290,7 @@ function build() {
   /* selected boat: name tag, story card, dotted past/future route, camera follow */
   const dotTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 32; const x = c.getContext('2d'); x.fillStyle = '#fff'; x.beginPath(); x.arc(16, 16, 13, 0, 6.2832); x.fill(); return new T.CanvasTexture(c); })();
   const tag = document.createElement('div'); tag.className = 'label boat'; tag.style.display = 'none'; document.body.appendChild(tag);
-  let sel = null, lastKey = '', lastEta = -1, zoomT = 0;
+  let sel = null, lastKey = '', lastEta = -1;
   const fmt = s => { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
   function boatCard(b, force) {
     const c = b.cur, from = c.leg === 'out' ? b.A.name : b.B.name, to = c.leg === 'out' ? b.B.name : b.A.name;
@@ -1299,12 +1310,11 @@ function build() {
     if (!sel) return;
     planetGroup.remove(sel.past, sel.future); sel.past.geometry.dispose(); sel.future.geometry.dispose();
     sel = null; tag.style.display = 'none';
-    controls.autoRotate = spinBtn.classList.contains('on');
     if (hideCard && card.dataset.boat) card.classList.remove('on');
     delete card.dataset.boat;
   }
   function selectBoat(b) {
-    if (sel && sel.b === b) return;
+    if (sel && sel.b === b) { setFocus(b.n, 1.7); return; }
     clearBoat(false);
     const dots = []; for (let i = 0; i < b.pts.length; i += 3) dots.push(b.pts[i]);
     const arr = new Float32Array(dots.length * 3); dots.forEach((v, i) => v.clone().multiplyScalar(1.007).toArray(arr, i * 3));
@@ -1314,8 +1324,7 @@ function build() {
       p.frustumCulled = false; p.renderOrder = 4; planetGroup.add(p); return p;
     };
     sel = { b, n: dots.length, past: mk(0.45, 5), future: mk(1, 7) };
-    tag.textContent = b.spec.name; tag.style.display = 'block'; lastKey = ''; zoomT = 1.6;
-    controls.autoRotate = false;
+    tag.textContent = b.spec.name; tag.style.display = 'block'; lastKey = ''; setFocus(b.n, 1.7);
     updateBoat(b, nowT); boatCard(b, true);
   }
   const _c = new T.Vector3();
@@ -1327,15 +1336,6 @@ function build() {
     sel.past.geometry.setDrawRange(outLeg ? 0 : k, outLeg ? k : sel.n - k);
     sel.future.geometry.setDrawRange(outLeg ? k : 0, outLeg ? sel.n - k : k);
     boatCard(b, false);
-    // follow the boat unless the user is dragging
-    if (!down) {
-      const dist = camera.position.length(); _c.copy(camera.position).normalize();
-      const a = 1 - Math.exp(-dt * 3);
-      const ang = Math.acos(Math.min(1, _c.dot(b.n)));
-      if (ang > 1e-4) { const sn = Math.sin(ang), w = Math.sin(a * ang) / sn; _c.multiplyScalar(Math.sin((1 - a) * ang) / sn).addScaledVector(b.n, w); }
-      let nd = dist; if (zoomT > 0) { zoomT -= dt; nd += (1.7 - dist) * (1 - Math.exp(-dt * 3)); }
-      camera.position.copy(_c.normalize()).multiplyScalar(nd);
-    }
     // name tag next to the boat
     _c.copy(b.g.position).project(camera);
     const facing = b.n.dot(camera.position) - 1;
@@ -1415,10 +1415,10 @@ function build() {
   world = { P, cities, volcanoes, storms, boats, selectBoat, clearBoat, boatSelected: () => !!sel };
   if (new URLSearchParams(location.search).has('debug')) window.__np = { camera, controls, scene, planetGroup, boats, storms, volcanoes, cities, rail };
   const q = new URLSearchParams(location.search).get('go');   // e.g. ?go=volcano | volcano2 | storm | storm2 | city3 | boat2
-  if (q) setTimeout(() => { controls.autoRotate = false;
-    if (q.startsWith('boat')) { const b = boats[+q.slice(4)]; selectBoat(b); camera.position.copy(b.n).multiplyScalar(+(new URLSearchParams(location.search).get('d') || 1.7)); controls.update(); return; }
+  if (q) setTimeout(() => { spinBtn.classList.remove('on');
+    if (q.startsWith('boat')) { const b = boats[+q.slice(4)]; selectBoat(b); camera.position.copy(b.n).multiplyScalar(+(new URLSearchParams(location.search).get('d') || 1.7)); controls.update(); if (focus) focus.ease = 0; return; }
     const tgt = q === 'volcano' ? volcanoes[0] : q === 'volcano2' ? volcanoes[1] : q === 'storm' ? storms[0] : q === 'storm2' ? storms[1] : cities[+q.slice(4)];
-    camera.position.copy(tgt.n).multiplyScalar(+(new URLSearchParams(location.search).get('d') || 1.8)); controls.update();
+    camera.position.copy(tgt.n).multiplyScalar(+(new URLSearchParams(location.search).get('d') || 1.8)); controls.update(); releaseFocus();
     if (tgt.erupt) tgt.erupt(); else if (tgt.zap) tgt.zap(); }, 200);
   console.log('Nathaniel Planet built', { cities: cities.map(c => [c.name, c.biome]), mountains: mtnN.length, volcanoes: volcanoes.length, storms: storms.length, boats: boats.length, whales: whales.length, trains: boats.filter(b => b.rail).length, railEdges: rail.edges.length });
   planetGroup.userData.planet = planet; pickables.push(planet);
@@ -1450,7 +1450,7 @@ function updateLabels() {
 /* ---------- cards, selection, fly-to ---------- */
 const card = document.getElementById('card'), cardH = card.querySelector('h2'), cardP = card.querySelector('p');
 function showCard(h, p) { cardH.textContent = h; cardP.textContent = p; card.classList.add('on'); }
-document.getElementById('cardX').onclick = () => { card.classList.remove('on'); if (world) world.clearBoat(false); };
+document.getElementById('cardX').onclick = () => { card.classList.remove('on'); releaseFocus(); if (world) world.clearBoat(false); };
 
 const VOLCANO_LINES = [
   ['Mount Fugi is huge, grumpy, and erupts when poked. You just poked it.', 'KABOOM! Mount Fugi says it was only clearing its throat.', 'Mount Fugi has erupted 3,000 times. It still finds it exciting.'],
@@ -1463,26 +1463,22 @@ function select(kind, c) {
   if (kind === 'city') { n = c.n; showCard(c.name, c.info); }
   else if (kind === 'volcano') { n = c.n; dist = 1.6; c.erupt(); showCard(c.name, VOLCANO_LINES[world.volcanoes.indexOf(c)][lineI++ % 3]); }
   else if (kind === 'storm') { n = c.n; dist = 2.0; c.zap(); showCard(c.name, c.lines[c.li++ % c.lines.length]); }
-  flyTo(n, dist);
+  setFocus(n, dist);
 }
-let fly = null;
-function flyTo(n, dist) {
-  const from = camera.position.clone();
-  fly = { t: 0, a: from.clone().normalize(), b: n.clone().normalize(), d0: from.length(), d1: Math.min(Math.max(dist, controls.minDistance), controls.maxDistance) };
-}
-function stepFly(dt) {
-  if (!fly) return;
-  fly.t = Math.min(1, fly.t + dt / 1.3);
-  const e = fly.t < .5 ? 2 * fly.t * fly.t : 1 - Math.pow(-2 * fly.t + 2, 2) / 2;
-  const dir = fly.a.clone().lerp(fly.b, e).normalize();
-  // spherical interpolation keeps it smooth for large angles
-  const ang = Math.acos(Math.min(1, fly.a.dot(fly.b)));
-  if (ang > 1e-3) {
-    const s = Math.sin(ang);
-    dir.copy(fly.a).multiplyScalar(Math.sin((1 - e) * ang) / s).addScaledVector(fly.b, Math.sin(e * ang) / s);
-  }
-  camera.position.copy(dir).multiplyScalar(fly.d0 + (fly.d1 - fly.d0) * e);
-  if (fly.t >= 1) fly = null;
+/* ---------- focus: a tapped thing is centred and stays centred (moving things are followed) ---------- */
+let focus = null;
+function setFocus(n, dist) { focus = { n, dist: Math.min(Math.max(dist, controls.minDistance), controls.maxDistance), ease: 1.6 }; }
+function releaseFocus() { focus = null; }          // spin (if switched on) starts again
+const _fc = new T.Vector3();
+function stepFocus(dt) {
+  if (!focus || down) return;
+  const dist = camera.position.length();
+  if (focus.ease <= 0 && dist > 2.6) { releaseFocus(); if (world) world.clearBoat(true); return; }   // zoomed out: user has moved on
+  _fc.copy(camera.position).normalize();
+  const a = 1 - Math.exp(-dt * 3.5), ang = Math.acos(Math.min(1, _fc.dot(focus.n)));
+  if (ang > 1e-4) { const sn = Math.sin(ang); _fc.multiplyScalar(Math.sin((1 - a) * ang) / sn).addScaledVector(focus.n, Math.sin(a * ang) / sn); }
+  let nd = dist; if (focus.ease > 0) { focus.ease -= dt; nd += (focus.dist - dist) * a; }
+  camera.position.copy(_fc.normalize()).multiplyScalar(nd);
 }
 
 /* ---------- input ---------- */
@@ -1497,22 +1493,22 @@ function pick(ev) {
   for (const h of hits) { if (h.object.userData.kind === 'planet') return null; return h.object.userData; }
   return null;
 }
-canvas.addEventListener('pointerdown', e => { down = { x: e.clientX, y: e.clientY }; fly = null; });
+canvas.addEventListener('pointerdown', e => { down = { x: e.clientX, y: e.clientY }; });
 canvas.addEventListener('pointerup', e => {
   if (!down || !world) return;
   const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y); down = null;
   if (moved > 6) return;
-  const u = pick(e); if (!u) { world.clearBoat(true); return; }
+  const u = pick(e); if (!u) { world.clearBoat(true); releaseFocus(); return; }
   select(u.kind, u.ref);
 });
 canvas.addEventListener('pointermove', e => {
   if (!world) return;
-  if (e.buttons) { if (down && world.boatSelected() && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 8) world.clearBoat(true); return; }
+  if (e.buttons) { if (down && focus && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 8) { releaseFocus(); world.clearBoat(true); } return; }
   document.body.classList.toggle('pointer', !!pick(e));
 });
 
 const spinBtn = document.getElementById('spin');
-spinBtn.onclick = () => { controls.autoRotate = !controls.autoRotate; spinBtn.classList.toggle('on', controls.autoRotate); spinBtn.textContent = controls.autoRotate ? 'Spinning' : 'Paused'; };
+spinBtn.onclick = () => { const on = !spinBtn.classList.contains('on'); spinBtn.classList.toggle('on', on); spinBtn.textContent = on ? 'Spinning' : 'Paused'; };
 document.getElementById('placesBtn').onclick = e => { document.getElementById('places').classList.toggle('on'); e.currentTarget.classList.toggle('on'); };
 addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); spinBtn.click(); } });
 
@@ -1529,7 +1525,8 @@ function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000); last = now; time += dt;
   starMat.uniforms.time.value = time;
-  stepFly(dt);
+  stepFocus(dt);
+  controls.autoRotate = spinBtn.classList.contains('on') && !focus;
   controls.rotateSpeed = 0.25 + (camera.position.length() - 1.5) * 0.18;
   controls.update();
   for (const f of tickers) f(time, dt);
@@ -1544,5 +1541,41 @@ requestAnimationFrame(() => setTimeout(() => {
 })();
 </script>
 <script>if ('serviceWorker' in navigator && location.protocol.startsWith('http')) addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));</script>
+<script>
+/* ---------- update checker: looks every 10 minutes, jiggles the button when a new version is out ---------- */
+(() => {
+  const FILES = ['index.html', 'planet-gen.js', 'planet-worker.js', 'manifest.webmanifest'];
+  const btn = document.getElementById('updBtn'), msg = document.getElementById('updMsg');
+  let base = null, avail = false, busy = false, lastCheck = 0, msgT = 0;
+  const hash = t => { let h = 2166136261; for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36) + '.' + t.length; };
+  const sig = async fresh => (await Promise.all(FILES.map(async f => {
+    const r = await fetch(f, fresh ? { cache: 'no-store' } : undefined); if (!r.ok) throw new Error(f); return hash(await r.text());
+  }))).join('|');
+  const say = t => { msg.textContent = t; msg.classList.add('on'); clearTimeout(msgT); msgT = setTimeout(() => msg.classList.remove('on'), 2600); };
+  const setAvail = v => { avail = v; btn.classList.toggle('avail', v); btn.title = v ? 'Update available: tap to update' : 'Check for updates'; };
+  async function check(manual) {
+    if (busy) return; busy = true; btn.classList.add('checking'); lastCheck = Date.now();
+    try {
+      if (base === null) base = await sig(false);          // what this page was loaded with
+      const now = await sig(true);                          // what the server has right now
+      if (now !== base) { setAvail(true); if (manual) { say('Updating…'); await apply(); return; } }
+      else if (manual) say('Up to date ✓');
+    } catch (e) { if (manual) say(navigator.onLine ? 'Couldn\'t check' : 'Offline'); }
+    busy = false; btn.classList.remove('checking');
+  }
+  async function apply() {
+    try {
+      await Promise.all(FILES.map(f => fetch(f, { cache: 'reload' })));            // refresh the browser's own copies
+      if (window.caches) for (const k of await caches.keys()) await caches.delete(k);
+      if (navigator.serviceWorker) { const reg = await navigator.serviceWorker.getRegistration(); if (reg) await reg.update(); }
+    } catch (e) {}
+    location.reload();
+  }
+  btn.onclick = () => { if (avail) { busy = true; btn.classList.add('checking'); say('Updating…'); apply(); } else check(true); };
+  addEventListener('load', () => setTimeout(() => { if (base === null) sig(false).then(b => { if (base === null) base = b; }).catch(() => {}); }, 1500));
+  setInterval(() => check(false), 10 * 60 * 1000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - lastCheck > 60000) check(false); });
+})();
+</script>
 </body>
 </html>
