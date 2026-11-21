@@ -2205,7 +2205,12 @@ const card = document.getElementById('card'), cardH = card.querySelector('h2'), 
 const cardPic = document.getElementById('cardPic'), cardPx = cardPic.getContext('2d');
 let closeupRAF = null, closeupT0 = 0;
 function stopCloseup() { if (closeupRAF) cancelAnimationFrame(closeupRAF); closeupRAF = null; }
+// the card closes itself once the camera has pulled well back from where the reader was looking
+let cardCloseAt = Infinity;
+const closeDistFor = d => Math.max(2.6, 1 + (d - 1) * 2.5);   // 2.5x the height above the ground, and never below 2.6
+function closeCard() { card.classList.remove('on'); stopCloseup(); releaseFocus(); if (world) world.clearBoat(false); cardCloseAt = Infinity; }
 function showCard(h, p, closeup) {
+  cardCloseAt = closeDistFor(camera.position.length());
   cardH.textContent = h; cardBody.innerHTML = ''; cardBody.scrollTop = 0;
   for (const para of Array.isArray(p) ? p : [p]) { const el = document.createElement('p'); el.textContent = para; cardBody.appendChild(el); }
   card.classList.add('on');
@@ -2216,7 +2221,7 @@ function showCard(h, p, closeup) {
     loop();
   }
 }
-document.getElementById('cardX').onclick = () => { card.classList.remove('on'); stopCloseup(); releaseFocus(); if (world) world.clearBoat(false); };
+document.getElementById('cardX').onclick = closeCard;
 
 const VOLCANO_LINES = [
   ['Mount Fugi is huge, grumpy, and erupts when poked. You just poked it.', 'KABOOM! Mount Fugi says it was only clearing its throat.', 'Mount Fugi has erupted 3,000 times. It still finds it exciting.'],
@@ -2303,7 +2308,7 @@ function select(kind, c) {
 }
 /* ---------- focus: a tapped thing is centred and stays centred (moving things are followed) ---------- */
 let focus = null;
-function setFocus(n, dist) { focus = { n, dist: Math.min(Math.max(dist, controls.minDistance), controls.maxDistance), ease: 1.6 }; }
+function setFocus(n, dist) { focus = { n, dist: Math.min(Math.max(dist, controls.minDistance), controls.maxDistance), ease: 1.6 }; cardCloseAt = closeDistFor(focus.dist); }
 function releaseFocus() { focus = null; }          // spin (if switched on) starts again
 const _fc = new T.Vector3();
 function stepFocus(dt) {
@@ -2376,6 +2381,7 @@ function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000) * (window.__ts || 1); last = now; time += dt;
   starMat.uniforms.time.value = time;
   stepFocus(dt);
+  if (card.classList.contains('on') && camera.position.length() > cardCloseAt && !(focus && focus.ease > 0)) closeCard();   // zoomed well away: put the card away
   controls.autoRotate = !focus && !window.__noSpin && performance.now() - lastTouch > 30000;
   { const dd = camera.position.length(); controls.rotateSpeed = Math.max(0.03, 0.25 + (dd - 1.5) * 0.18) * Math.min(1, (dd - 1) / 0.45); controls.zoomSpeed = Math.max(0.06, 1.2 * (dd - 1) / dd); }
   controls.update();
