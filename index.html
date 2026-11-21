@@ -1688,12 +1688,12 @@ function build() {
       const riverMesh = new T.Mesh(geo, toon(0xffffff, { vertexColors: true, side: T.DoubleSide })); riverMesh.frustumCulled = false; planetGroup.add(riverMesh);
 
       /* ---------- Marshmallow Falls, and the Slightly Pink Mallow Minnows who live on them ---------- */
-      const fn = river[fallsIdx].clone(), [fu, fw] = perpFrame(fn), fS = K * 2;
+      const fn = river[fallsIdx].clone(), [fu, fw] = perpFrame(fn), fS = K * 0.55;   // sized to the river, not the moon
       const fg = new T.Group();
       const mallowGeo = new T.SphereGeometry(1, 10, 8), mallowMat = toon(0xfffaf2);
-      for (let i = 0; i < 10; i++) {
-        const k = i / 10, a = (rng() - 0.5) * 0.8, m = withInk(new T.Mesh(mallowGeo, mallowMat), 1.12);
-        m.scale.setScalar((0.16 - k * 0.05) * fS); m.position.set(a * 0.08 * fS, 0.12 * fS * (1 - k), (0.02 + k * 0.03) * fS); fg.add(m);
+      for (let i = 0; i < 12; i++) {
+        const k = i / 12, a = (rng() - 0.5) * 0.8, m = withInk(new T.Mesh(mallowGeo, mallowMat), 1.12);
+        m.scale.setScalar((0.045 - k * 0.015) * fS); m.position.set(a * 0.08 * fS, 0.12 * fS * (1 - k), (0.02 + k * 0.03) * fS); fg.add(m);
       }
       const pool = withInk(new T.Mesh(new T.CircleGeometry(0.09 * fS, 28).rotateX(-Math.PI / 2), toon(0x4fb6e8, { transparent: true, opacity: 0.92 })), 1.05);
       pool.position.y = 0.0015; fg.add(pool);
@@ -1708,7 +1708,7 @@ function build() {
       tickers.push(t => { for (const mw of minnows) { const a = t * mw.sp + mw.ph, jump = Math.max(0, Math.sin(t * 0.4 + mw.jp)) > 0.95 ? Math.abs(Math.sin((t * 0.4 + mw.jp) * 14)) : 0; mw.g.position.set(Math.cos(a) * mw.r, 0.004 * fS + jump * 0.03 * fS, Math.sin(a) * mw.r); mw.g.rotation.y = -a + Math.PI / 2; } });
       fallsRef = { n: fn, li: 0, name: 'Marshmallow Falls' };
       const hitM = new T.Mesh(new T.SphereGeometry(1, 8, 6), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
-      hitM.position.copy(fn).multiplyScalar(1.01); hitM.scale.setScalar(0.11 * fS);
+      hitM.position.copy(fn).multiplyScalar(1.01); hitM.scale.setScalar(0.2 * fS);
       hitM.userData = { kind: 'falls', ref: fallsRef }; planetGroup.add(hitM); pickables.push(hitM);
       addLabel('Marshmallow Falls', fn, 1 + 0.1 * fS + 0.05, 'falls', () => select('falls', fallsRef));
     }
