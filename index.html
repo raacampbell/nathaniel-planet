@@ -2207,7 +2207,7 @@ let closeupRAF = null, closeupT0 = 0;
 function stopCloseup() { if (closeupRAF) cancelAnimationFrame(closeupRAF); closeupRAF = null; }
 // the card closes itself once the camera has pulled well back from where the reader was looking
 let cardCloseAt = Infinity;
-const closeDistFor = d => Math.max(2.6, 1 + (d - 1) * 2.5);   // 2.5x the height above the ground, and never below 2.6
+const closeDistFor = d => Math.max(1.8, 1 + (d - 1) * 1.75);   // 1.75x the height above the ground, and never below 1.8
 function closeCard() { card.classList.remove('on'); stopCloseup(); releaseFocus(); if (world) world.clearBoat(false); cardCloseAt = Infinity; }
 function showCard(h, p, closeup) {
   cardCloseAt = closeDistFor(camera.position.length());
