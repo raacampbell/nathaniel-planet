@@ -1524,9 +1524,10 @@ function build() {
     const cargo = c.leg === 'out' ? b.spec.out : b.spec.back;
     const story = c.docked ? `Docked at ${c.leg === 'out' ? b.B.name : b.A.name}. ${b.rail ? 'The passengers are stretching their legs and having a cup of tea.' : 'The crew are unloading and having a cup of tea.'}` : logs[li].replace('{from}', from).replace('{to}', to);
     cardH.textContent = b.spec.name;
-    cardP.innerHTML = `<span class="meta">${b.spec.captain}</span><br>` +
+    if (force) { stopCloseup(); card.classList.remove('pic'); cardBody.scrollTop = 0; }   // no landmark close-up picture on a boat's card
+    cardBody.innerHTML = `<p><span class="meta">${b.spec.captain}</span><br>` +
       `<b>Route:</b> ${from} → ${to} · arriving <span class="eta">${c.docked ? 'docked' : fmt(c.eta)}</span><br>` +
-      `<b>Carrying:</b> ${cargo}<br><i>${story}</i>`;
+      `<b>Carrying:</b> ${cargo}<br><i>${story}</i></p>`;
     card.classList.add('on'); card.dataset.boat = '1';
   }
   function clearBoat(hideCard) {
