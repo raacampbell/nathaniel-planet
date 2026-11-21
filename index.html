@@ -40,14 +40,16 @@
   #card .meta{color:var(--dim);font-size:13px}
   #card p b{color:var(--accent);font-weight:600}
   #card i{display:block;margin-top:6px;color:#e9e3ff}
-  #card{z-index:20;position:fixed;left:50%;bottom:64px;transform:translate(-50%,20px);width:min(440px,calc(100% - 32px));
+  #card{z-index:20;position:fixed;left:50%;bottom:64px;transform:translate(-50%,20px);width:min(480px,calc(100% - 32px));
     background:var(--card);border:2px solid var(--edge);border-radius:18px;padding:14px 18px 14px;
     backdrop-filter:blur(6px);opacity:0;pointer-events:none;transition:.25s;display:flex;gap:12px;align-items:flex-start}
   #card.on{opacity:1;transform:translate(-50%,0);pointer-events:auto}
   #card h2{margin:0 0 4px;font-size:20px;color:var(--accent)}
-  #card p{margin:0;font-size:15px;line-height:1.35}
+  #card p{margin:0 0 10px;font-size:15.5px;line-height:1.42}
+  #card p:last-child{margin-bottom:0}
   #card button{position:absolute;right:10px;top:8px;background:none;border:0;color:var(--dim);font:inherit;font-size:20px;cursor:pointer}
   #cardTxt{flex:1 1 auto;min-width:0}
+  #cardBody{max-height:min(46vh,340px);overflow-y:auto;padding-right:6px}
   #cardPic{display:none;flex:0 0 auto;width:112px;height:112px;border-radius:14px;border:2px solid var(--edge);background:#0a0420;margin-top:2px}
   #card.pic #cardPic{display:block}
   #bar{position:fixed;right:14px;top:calc(env(safe-area-inset-top,0px) + 14px);display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
@@ -94,7 +96,7 @@
 <button class="btn round" id="updBtn" aria-label="Check for updates" title="Check for updates"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg></button>
   <div id="updMsg"></div>
 <div id="places"></div>
-<div id="card"><button id="cardX" aria-label="close">×</button><canvas id="cardPic" width="112" height="112"></canvas><div id="cardTxt"><h2></h2><p></p></div></div>
+<div id="card"><button id="cardX" aria-label="close">×</button><canvas id="cardPic" width="112" height="112"></canvas><div id="cardTxt"><h2></h2><div id="cardBody"></div></div></div>
 <div id="ageMsg"></div>
 <button id="alienBtn" aria-label="Alien invasion" title="Alien invasion"><svg viewBox="0 0 60 54"><path d="M30 3 L57 50 H3 Z" fill="#e01b1b" stroke="#fff" stroke-width="4" stroke-linejoin="round"/><path d="M30 12 L50 46 H10 Z" fill="#ffd400"/><ellipse cx="30" cy="34" rx="8" ry="9" fill="#3fa82f"/><ellipse cx="30" cy="31" rx="4.5" ry="4" fill="#fff"/><circle cx="30" cy="31" r="2" fill="#111"/><path d="M24 40 q-3 5 -6 4 M36 40 q3 5 6 4 M30 42 v5" stroke="#3fa82f" stroke-width="2" fill="none" stroke-linecap="round"/></svg><span>Alien invasion</span></button>
 <div id="loading">Making a planet…</div>
@@ -2199,12 +2201,14 @@ function updateLabels() {
 }
 
 /* ---------- cards, selection, fly-to ---------- */
-const card = document.getElementById('card'), cardH = card.querySelector('h2'), cardP = card.querySelector('p');
+const card = document.getElementById('card'), cardH = card.querySelector('h2'), cardBody = card.querySelector('#cardBody');
 const cardPic = document.getElementById('cardPic'), cardPx = cardPic.getContext('2d');
 let closeupRAF = null, closeupT0 = 0;
 function stopCloseup() { if (closeupRAF) cancelAnimationFrame(closeupRAF); closeupRAF = null; }
 function showCard(h, p, closeup) {
-  cardH.textContent = h; cardP.textContent = p; card.classList.add('on');
+  cardH.textContent = h; cardBody.innerHTML = ''; cardBody.scrollTop = 0;
+  for (const para of Array.isArray(p) ? p : [p]) { const el = document.createElement('p'); el.textContent = para; cardBody.appendChild(el); }
+  card.classList.add('on');
   stopCloseup(); card.classList.toggle('pic', !!closeup);
   if (closeup) {
     closeupT0 = performance.now();
@@ -2220,9 +2224,21 @@ const VOLCANO_LINES = [
   ['Mount Chicken Nugget has rained nuggets every single day for 900 years. Nobody has ever complained.', 'Splat! A downpour! The weather forecast was "mostly golden, with a chance of dipping sauce".', 'Local legend says the cloud is made of steam from one enormous fryer. Local legend has not been checked.']];
 let lineI = 0;
 
-const FALLS_LINES = ["White water that isn't water at all: Marshmallow Falls tumbles with fresh marshmallows, all day, every day.", 'The Slightly Pink Mallow Minnows live in the pool below and eat almost nothing but marshmallows — though if they have truly had enough mallow for one day, they will happily snack on a passing bear instead.', "Everyone on Nathaniel Planet gives the falls a wide berth. Sticky, sugary, and faintly menacing — nobody wants to find out the hard way why the Minnows are 'slightly' pink."];
-const GLACIER_LINES = ['Deep in the polar wastes stands a glacier made entirely of vanilla ice cream, scooped there by nature itself.', "One extremely cross penguin has appointed itself the glacier's sole guardian, and is furious that herds of mountain goats keep scaling the peak just to nibble the vanilla away.", 'The goats climb, the penguin shouts, the glacier shrinks one lick at a time. Nobody has told the penguin that ice cream melts on its own, too.'];
-const LAKE_LINES = ['A frozen lake in the tundra, just poleward of Fizzlewick, where the fizz in the air makes the frost faintly sparkle.', 'A lone penguin skates here every day, practising spins, jumps, and the occasional over-ambitious triple axel.', 'Local legend says the penguin has never once fallen over. Local legend has also never watched closely enough.'];
+const FALLS_LINES = [
+  "A wide river rises deep in the middle of the continent and meanders all the way down to the sea — and right at its heart, the water doesn't fall, it cascades. Marshmallow Falls is a tumbling white cataract of fresh marshmallows, crashing into a syrup-sweet pool below, all day, every day, without ever once running out.",
+  "The pool is home to the Slightly Pink Mallow Minnows, a shoal of small, faintly blushing fish whose whole world is marshmallows — it's their main food source, falling to them for free, forever. But every so often a Minnow has had truly enough mallow for one day. On those days, if a bear happens to wander past, the Minnow eats the bear instead.",
+  "This is exactly why the inhabitants of Nathaniel Planet give Marshmallow Falls a very wide berth. It looks like the sweetest spot on the planet — and most of the time it is — right up until a sugar-sated Minnow decides it fancies something with a bit more protein."
+];
+const GLACIER_LINES = [
+  "One of the polar continents holds a single huge mountain, capped with a glacier made entirely of vanilla ice cream — scooped there, somehow, by nature itself, and never once fully melting away.",
+  "Guarding it is one very angry penguin: a self-appointed sole guardian who has made it their life's mission to preserve the glacier for future generations. Future generations of what, the penguin has never actually specified.",
+  "The trouble is herds of mountain goats, who look at a whole mountain of vanilla and do exactly what any sensible goat would do: scale the peaks and nibble it away, one happy mouthful at a time. The penguin shouts, the goats climb, and the glacier shrinks a lick at a time — nobody involved shows any sign of stopping."
+];
+const LAKE_LINES = [
+  "A frozen lake sits in the tundra, just poleward of Fizzlewick — close enough that on a still day you can still catch the fizz in the air, needling the frost into a faint sparkle.",
+  "One lone penguin skates here, every single day, practising spins, jumps, and the occasional wildly over-ambitious triple axel — with nobody watching, and no competition to win.",
+  "Local legend says this penguin has never once fallen over. Local legend has also never actually stayed around to watch the whole routine."
+];
 function drawFallsCloseup(ctx, t) {
   ctx.clearRect(0, 0, 112, 112);
   const g = ctx.createLinearGradient(0, 0, 0, 112); g.addColorStop(0, '#bfe8ff'); g.addColorStop(1, '#eaf8ff'); ctx.fillStyle = g; ctx.fillRect(0, 0, 112, 112);
@@ -2280,9 +2296,9 @@ function select(kind, c) {
   else if (kind === 'storm') { n = c.n; dist = 2.0; c.zap(); showCard(c.name, c.lines[c.li++ % c.lines.length]); }
   else if (kind === 'station') { n = c.n; dist = 2.3; showCard(c.name, c.lines[c.li++ % c.lines.length]); }
   else if (kind === 'launch') { const ok = c.go && c.go(); n = c.rocketN || c.n; dist = ok ? 1.45 : 1.3; showCard(c.name, ok ? '3… 2… 1… Lift-off! A brand new satellite is on its way to orbit.' : c.state === 'ready' ? 'The launch pad is waiting.' : 'Hold on, a rocket is already on its way!'); }
-  else if (kind === 'falls') { n = c.n; dist = 1.4; showCard(c.name, FALLS_LINES[c.li++ % FALLS_LINES.length], drawFallsCloseup); }
-  else if (kind === 'glacier') { n = c.n; dist = 1.55; showCard(c.name, GLACIER_LINES[c.li++ % GLACIER_LINES.length], drawGlacierCloseup); }
-  else if (kind === 'lake') { n = c.n; dist = 1.4; showCard(c.name, LAKE_LINES[c.li++ % LAKE_LINES.length]); }
+  else if (kind === 'falls') { n = c.n; dist = 1.4; showCard(c.name, FALLS_LINES, drawFallsCloseup); }
+  else if (kind === 'glacier') { n = c.n; dist = 1.55; showCard(c.name, GLACIER_LINES, drawGlacierCloseup); }
+  else if (kind === 'lake') { n = c.n; dist = 1.4; showCard(c.name, LAKE_LINES); }
   setFocus(n, dist);
 }
 /* ---------- focus: a tapped thing is centred and stays centred (moving things are followed) ---------- */
