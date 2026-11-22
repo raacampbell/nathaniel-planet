@@ -160,56 +160,87 @@ controls.maxDistance = 6;
 controls.autoRotate = true;
 controls.autoRotateSpeed = 0.24;
 let lastTouch = performance.now();                       // the planet only starts spinning after 30 s without any interaction
-for (const ev of ['pointerdown', 'pointermove', 'wheel', 'touchstart', 'keydown']) addEventListener(ev, e => { if (ev !== 'pointermove' || e.buttons) lastTouch = performance.now(); }, { passive: true });
+for (const eventName of ['pointerdown', 'pointermove', 'wheel', 'touchstart', 'keydown']) {
+  addEventListener(eventName, event => {
+    if (eventName !== 'pointermove' || event.buttons) lastTouch = performance.now();   // moving the mouse only counts while a button is held
+  }, { passive: true });
+}
 
-const planetGroup = new T.Group();
+const planetGroup = new T.Group();   // everything that sits on the planet goes in here
 scene.add(planetGroup);
 
+// The "cartoon shading" ramp: five flat brightness steps instead of a smooth gradient.
 const toonGrad = (() => {
-  const d = new Uint8Array([95, 140, 185, 225, 255]);
-  const t = new T.DataTexture(d, 5, 1, T.LuminanceFormat);
-  t.minFilter = t.magFilter = T.NearestFilter; t.needsUpdate = true; return t;
+  const steps = new Uint8Array([95, 140, 185, 225, 255]);
+  const texture = new T.DataTexture(steps, 5, 1, T.LuminanceFormat);
+  texture.minFilter = texture.magFilter = T.NearestFilter;
+  texture.needsUpdate = true;
+  return texture;
 })();
+// A cartoon-shaded material in the given colour. `extra` adds or overrides material options.
 const toon = (color, extra) => new T.MeshToonMaterial(Object.assign({ color, gradientMap: toonGrad }, extra || {}));
+// The black material used for the cartoon outlines (a slightly bigger copy of a mesh, drawn inside out behind it).
 const inkMat = new T.MeshBasicMaterial({ color: 0x120a2a, side: T.BackSide });
-function withInk(mesh, s) { const o = new T.Mesh(mesh.geometry, inkMat); o.scale.setScalar(s || 1.12); mesh.add(o); return mesh; }
+// Gives `mesh` a black outline, `scale` times its size (default 1.12). Returns the mesh.
+function withInk(mesh, scale) {
+  const outline = new T.Mesh(mesh.geometry, inkMat);
+  outline.scale.setScalar(scale || 1.12);
+  mesh.add(outline);
+  return mesh;
+}
 
 const UP = new T.Vector3(0, 1, 0);
-function placeOnSurface(obj, n, radius, spin) {
-  obj.position.copy(n).multiplyScalar(radius || 1);
-  obj.quaternion.setFromUnitVectors(UP, n);
-  if (spin) obj.rotateY(spin);
+// Stands `object` on the planet's surface at direction `normal` (a unit vector), `radius` from the centre
+// (default 1), pointing away from the planet and turned by `spin` radians about its own upright axis.
+function placeOnSurface(object, normal, radius, spin) {
+  object.position.copy(normal).multiplyScalar(radius || 1);
+  object.quaternion.setFromUnitVectors(UP, normal);
+  if (spin) object.rotateY(spin);
 }
-const v3 = a => new T.Vector3(a[0], a[1], a[2]);
-const angle = (a, b) => Math.acos(Math.min(1, Math.max(-1, a.dot(b))));
+const v3 = xyz => new T.Vector3(xyz[0], xyz[1], xyz[2]);                              // [x, y, z] array -> Vector3
+const angle = (a, b) => Math.acos(Math.min(1, Math.max(-1, a.dot(b))));              // angle in radians between two unit vectors
 
 /* ---------- stars ---------- */
-let starMat = null;
+let starMat = null;   // the stars' material; its `time` uniform is updated every frame to make them twinkle
 (function () {
-  const n = 6000, pos = new Float32Array(n * 3), col = new Float32Array(n * 3),
-        size = new Float32Array(n), phase = new Float32Array(n);
+  const starCount = 6000;
+  const positions = new Float32Array(starCount * 3), colors = new Float32Array(starCount * 3);
+  const sizes = new Float32Array(starCount), twinklePhases = new Float32Array(starCount);
   const rng = PlanetGen.mulberry32(5);
-  const tints = [[1, 1, 1], [1, .93, .75], [.75, .85, 1], [1, .8, .85]];
-  const bn = new T.Vector3(0.42, 0.88, 0.2).normalize(), e1 = new T.Vector3().crossVectors(bn, new T.Vector3(0, 0, 1)).normalize(), e2 = new T.Vector3().crossVectors(bn, e1);
-  const gauss = () => (rng() + rng() + rng() + rng() - 2) / 2;
-  for (let i = 0; i < n; i++) {
-    const R = 120; let x, y, z;
-    if (i < n * 0.38) {                  // a crowd of fainter stars along the milky way
-      const a = rng() * 6.2832, o = gauss() * 0.3;
-      const d = new T.Vector3().addScaledVector(e1, Math.cos(a)).addScaledVector(e2, Math.sin(a)).addScaledVector(bn, o).normalize();
-      x = d.x; y = d.y; z = d.z;
-    } else { z = rng() * 2 - 1; const t = rng() * 6.2832, r = Math.sqrt(1 - z * z); x = r * Math.cos(t); y = z; z = r * Math.sin(t); }
-    pos.set([R * x, R * y, R * z], i * 3);
-    col.set(tints[Math.floor(rng() * tints.length)], i * 3);
-    size[i] = rng() < 0.06 ? 6 + rng() * 5 : (i < n * 0.38 ? 1.4 + rng() * 1.8 : 1.8 + rng() * 2.6);
-    phase[i] = rng() * 6.28;
+  const tints = [[1, 1, 1], [1, .93, .75], [.75, .85, 1], [1, .8, .85]];   // white, yellow, blue, pink
+  // The milky way is a band of stars round the sky: bandNormal is the axis of the band, bandAxisA/B lie along it.
+  const bandNormal = new T.Vector3(0.42, 0.88, 0.2).normalize();
+  const bandAxisA = new T.Vector3().crossVectors(bandNormal, new T.Vector3(0, 0, 1)).normalize();
+  const bandAxisB = new T.Vector3().crossVectors(bandNormal, bandAxisA);
+  const gauss = () => (rng() + rng() + rng() + rng() - 2) / 2;      // roughly bell-shaped random number, about -1..1
+  for (let i = 0; i < starCount; i++) {
+    const skyRadius = 120;
+    let x, y, z;
+    if (i < starCount * 0.38) {                  // a crowd of fainter stars along the milky way
+      const angleAlongBand = rng() * 6.2832, offsetFromBand = gauss() * 0.3;
+      const direction = new T.Vector3()
+        .addScaledVector(bandAxisA, Math.cos(angleAlongBand))
+        .addScaledVector(bandAxisB, Math.sin(angleAlongBand))
+        .addScaledVector(bandNormal, offsetFromBand)
+        .normalize();
+      x = direction.x; y = direction.y; z = direction.z;
+    } else {                                     // the rest are scattered evenly over the whole sky
+      z = rng() * 2 - 1;
+      const longitude = rng() * 6.2832, ringRadius = Math.sqrt(1 - z * z);
+      x = ringRadius * Math.cos(longitude); y = z; z = ringRadius * Math.sin(longitude);
+    }
+    positions.set([skyRadius * x, skyRadius * y, skyRadius * z], i * 3);
+    colors.set(tints[Math.floor(rng() * tints.length)], i * 3);
+    sizes[i] = rng() < 0.06 ? 6 + rng() * 5 : (i < starCount * 0.38 ? 1.4 + rng() * 1.8 : 1.8 + rng() * 2.6);   // a few big bright stars
+    twinklePhases[i] = rng() * 6.28;
   }
-  const g = new T.BufferGeometry();
-  g.setAttribute('position', new T.BufferAttribute(pos, 3));
-  g.setAttribute('color', new T.BufferAttribute(col, 3));
-  g.setAttribute('size', new T.BufferAttribute(size, 1));
-  g.setAttribute('phase', new T.BufferAttribute(phase, 1));
-  const m = new T.ShaderMaterial({
+  const geometry = new T.BufferGeometry();
+  geometry.setAttribute('position', new T.BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new T.BufferAttribute(colors, 3));
+  geometry.setAttribute('size', new T.BufferAttribute(sizes, 1));
+  geometry.setAttribute('phase', new T.BufferAttribute(twinklePhases, 1));
+  // Each star is a soft round dot whose brightness wobbles over time (vT), offset by its own phase.
+  const material = new T.ShaderMaterial({
     uniforms: { time: { value: 0 }, pr: { value: renderer.getPixelRatio() } },
     vertexShader: `attribute float size; attribute float phase; attribute vec3 color; uniform float time; uniform float pr;
       varying vec3 vC; varying float vT;
@@ -219,16 +250,18 @@ let starMat = null;
       void main(){ float d=length(gl_PointCoord-0.5); float a=smoothstep(0.5,0.1,d)*vT; gl_FragColor=vec4(vC,a);} `,
     transparent: true, depthWrite: false,
   });
-  const pts = new T.Points(g, m); pts.frustumCulled = false; scene.add(pts);
-  starMat = m;
+  const points = new T.Points(geometry, material);
+  points.frustumCulled = false;
+  scene.add(points);
+  starMat = material;
 })();
 
 
 /* ---------- build the world (after first paint) ---------- */
 let world = null;
-const pickables = [];
-const labels = [];
-const tickers = [];   // functions(t, dt)
+const pickables = [];   // things you can click or tap on the planet
+const labels = [];      // the floating name labels
+const tickers = [];     // functions(t, dt) that are called every frame
 // The globe is now 1.5x wider again (radius x 2.12 in total). The scene is kept in unit-sphere
 // coordinates, so every object on it is shrunk by K: cities, ships etc. stay the size they were.
 const GROW = 1.25;                          // globe area x1.5625 on top of the 1.5x-wide planet (two +25% steps)
@@ -236,52 +269,75 @@ const RK = 1 / GROW;                           // size factor for things not sca
 const K = Math.SQRT1_2 / 1.5 * RK;
 
 /* merge many small static meshes into two draw calls (coloured + ink outline) */
-function mergeParts(parts) {            // parts: [[geometry, THREE.Color], ...] -> vertex-coloured, non-indexed
-  let n = 0; const gs = parts.map(([g, c]) => { const q = g.index ? g.toNonIndexed() : g; n += q.attributes.position.count; return [q, c]; });
-  const p = new Float32Array(n * 3), nm = new Float32Array(n * 3), cl = new Float32Array(n * 3); let o = 0;
-  for (const [g, c] of gs) {
-    const cnt = g.attributes.position.count;
-    p.set(g.attributes.position.array, o * 3); nm.set(g.attributes.normal.array, o * 3);
-    for (let i = 0; i < cnt; i++) { cl[(o + i) * 3] = c.r; cl[(o + i) * 3 + 1] = c.g; cl[(o + i) * 3 + 2] = c.b; }
-    o += cnt;
+// parts: [[geometry, THREE.Color], ...]. Returns one vertex-coloured, non-indexed geometry containing them all.
+function mergeParts(parts) {
+  // First make every geometry non-indexed and count the total vertices.
+  let totalVertices = 0;
+  const flatParts = parts.map(([geometry, color]) => {
+    const flat = geometry.index ? geometry.toNonIndexed() : geometry;
+    totalVertices += flat.attributes.position.count;
+    return [flat, color];
+  });
+  const positions = new Float32Array(totalVertices * 3), normals = new Float32Array(totalVertices * 3), colors = new Float32Array(totalVertices * 3);
+  let vertexOffset = 0;
+  for (const [geometry, color] of flatParts) {
+    const vertexCount = geometry.attributes.position.count;
+    positions.set(geometry.attributes.position.array, vertexOffset * 3);
+    normals.set(geometry.attributes.normal.array, vertexOffset * 3);
+    for (let i = 0; i < vertexCount; i++) {                    // paint every vertex of this part in its colour
+      colors[(vertexOffset + i) * 3] = color.r;
+      colors[(vertexOffset + i) * 3 + 1] = color.g;
+      colors[(vertexOffset + i) * 3 + 2] = color.b;
+    }
+    vertexOffset += vertexCount;
   }
-  const geo = new T.BufferGeometry();
-  geo.setAttribute('position', new T.BufferAttribute(p, 3)); geo.setAttribute('normal', new T.BufferAttribute(nm, 3)); geo.setAttribute('color', new T.BufferAttribute(cl, 3));
-  return geo;
+  const merged = new T.BufferGeometry();
+  merged.setAttribute('position', new T.BufferAttribute(positions, 3));
+  merged.setAttribute('normal', new T.BufferAttribute(normals, 3));
+  merged.setAttribute('color', new T.BufferAttribute(colors, 3));
+  return merged;
 }
+/* Collects the meshes of several objects and bakes them into just two meshes (coloured + outline).
+   Use: const baker = makeBaker(); baker.add(object); ...; baker.finish(parentObject). */
 function makeBaker() {
-  const col = [], ink = [];
+  const colouredParts = [], inkParts = [];
   return {
+    // Adds every mesh under `root`, frozen in its current world position.
     add(root) {
       root.updateMatrixWorld(true);
-      root.traverse(o => {
-        if (!o.isMesh) return;
-        const g = o.geometry.clone(); g.applyMatrix4(o.matrixWorld);
-        if (!g.attributes.normal) g.computeVertexNormals();
-        if (o.material === inkMat) ink.push([g, new T.Color(0)]); else col.push([g, o.material.color]);
+      root.traverse(object => {
+        if (!object.isMesh) return;
+        const geometry = object.geometry.clone();
+        geometry.applyMatrix4(object.matrixWorld);
+        if (!geometry.attributes.normal) geometry.computeVertexNormals();
+        if (object.material === inkMat) inkParts.push([geometry, new T.Color(0)]);
+        else colouredParts.push([geometry, object.material.color]);
       });
     },
+    // Creates the two merged meshes and puts them in `parent`.
     finish(parent) {
-      if (col.length) parent.add(new T.Mesh(mergeParts(col), toon(0xffffff, { vertexColors: true })));
-      if (ink.length) parent.add(new T.Mesh(mergeParts(ink), inkMat));
+      if (colouredParts.length) parent.add(new T.Mesh(mergeParts(colouredParts), toon(0xffffff, { vertexColors: true })));
+      if (inkParts.length) parent.add(new T.Mesh(mergeParts(inkParts), inkMat));
     },
   };
 }
-/* a bumpy, craggy cone */
-function craggyCone(r, h, radial, heightSeg, jitter, seed) {
-  const g = new T.ConeGeometry(r, h, radial, heightSeg, false); g.translate(0, h / 2, 0);
-  const p = g.attributes.position;
-  for (let i = 0; i < p.count; i++) {
-    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
-    const k = y / h;                      // 0 base .. 1 tip
-    if (k > 0.97) continue;
-    const q = Math.sin((Math.round(x * 4000) * 12.9898 + Math.round(z * 4000) * 78.233 + Math.round(y * 4000) * 37.719 + seed) * 43758.5453);
-    const hh = (q - Math.floor(q)) - 0.5;
-    const s = 1 + hh * jitter * (1 - k * 0.4);
-    p.setXYZ(i, x * s, y + hh * jitter * h * 0.07 * (k > 0.02 ? 1 : 0), z * s);
+/* a bumpy, craggy cone: radius, height, sides, height segments, how rough (jitter), and a seed so each one is different */
+function craggyCone(radius, height, radialSegments, heightSegments, jitter, seed) {
+  const geometry = new T.ConeGeometry(radius, height, radialSegments, heightSegments, false);
+  geometry.translate(0, height / 2, 0);
+  const positions = geometry.attributes.position;
+  for (let i = 0; i < positions.count; i++) {
+    const x = positions.getX(i), y = positions.getY(i), z = positions.getZ(i);
+    const heightFraction = y / height;                      // 0 base .. 1 tip
+    if (heightFraction > 0.97) continue;                    // leave the very tip pointy
+    // A repeatable pseudo-random number from the vertex position, -0.5 .. 0.5
+    const hashed = Math.sin((Math.round(x * 4000) * 12.9898 + Math.round(z * 4000) * 78.233 + Math.round(y * 4000) * 37.719 + seed) * 43758.5453);
+    const randomOffset = (hashed - Math.floor(hashed)) - 0.5;
+    const sideways = 1 + randomOffset * jitter * (1 - heightFraction * 0.4);   // push the vertex in or out
+    positions.setXYZ(i, x * sideways, y + randomOffset * jitter * height * 0.07 * (heightFraction > 0.02 ? 1 : 0), z * sideways);
   }
-  g.computeVertexNormals();
-  return g;
+  geometry.computeVertexNormals();
+  return geometry;
 }
 
 function build() {
