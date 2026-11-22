@@ -2034,54 +2034,66 @@ function build() {
     }
   });
   /* ---------- steam trains on the railway ---------- */
+  /* Builds one train (locomotive, coal tender and three carriages) from small cartoon parts. Returns a list of
+     units: { pivot, cx, half }. Every unit is its own rigid piece that pivots about its centre `cx` (and is
+     `half` long on each side), so the train can bend round curves. */
   function makeTrain(bodyCol, carCols) {
     const units = [];
     // each vehicle is its own rigid piece, pivoting about its centre cx, so the train bends round curves
+    // `build(addInked, addPlain, wheel)` draws the vehicle: addInked adds a mesh with a black outline, addPlain one without.
     const unit = (cx, half, build) => {
-      const g = new T.Group(), I = (mesh, s) => g.add(withInk(mesh, s || 1.14)), N = mesh => g.add(mesh);
-      const wheel = (x, z, r) => N(new T.Mesh(new T.CylinderGeometry(r, r, 0.0016, 14).rotateX(Math.PI / 2).translate(x, r, z), toon(0xc94a3a)));
-      build(I, N, wheel);
-      const bk = makeBaker(); bk.add(g);
-      const out = new T.Group(); bk.finish(out); out.position.x = -cx;
-      const piv = new T.Group(); piv.add(out); units.push({ piv, cx, half });
+      const group = new T.Group();
+      const addInked = (mesh, outlineScale) => group.add(withInk(mesh, outlineScale || 1.14));
+      const addPlain = mesh => group.add(mesh);
+      const wheel = (x, z, radius) => addPlain(new T.Mesh(new T.CylinderGeometry(radius, radius, 0.0016, 14).rotateX(Math.PI / 2).translate(x, radius, z), toon(0xc94a3a)));
+      build(addInked, addPlain, wheel);
+      const baker = makeBaker();           // merge all the parts into two meshes (coloured + outline)
+      baker.add(group);
+      const merged = new T.Group();
+      baker.finish(merged);
+      merged.position.x = -cx;
+      const pivot = new T.Group();
+      pivot.add(merged);
+      units.push({ piv: pivot, cx, half });
     };
-    const cyl = (r1, r2, h) => new T.CylinderGeometry(r1, r2, h, 14);
+    const cyl = (radiusTop, radiusBottom, height) => new T.CylinderGeometry(radiusTop, radiusBottom, height, 14);
     // locomotive
-    unit(0.0465, 0.031, (I, N, wheel) => {
-      I(new T.Mesh(cyl(0.0075, 0.0075, 0.034).rotateZ(Math.PI / 2).translate(0.052, 0.0155, 0), toon(bodyCol)));
-      N(new T.Mesh(cyl(0.0078, 0.0078, 0.002).rotateZ(Math.PI / 2).translate(0.0695, 0.0155, 0), toon(0x2a2a30)));
-      I(new T.Mesh(new T.CylinderGeometry(0.0022, 0.003, 0.011, 8).translate(0.062, 0.0285, 0), toon(0x2a2a30)), 1.2);
-      N(new T.Mesh(new T.CylinderGeometry(0.0042, 0.0025, 0.003, 8).translate(0.062, 0.0355, 0), toon(0x1a1a1e)));
-      I(new T.Mesh(new T.SphereGeometry(0.0034, 8, 6).translate(0.048, 0.0238, 0), toon(0xd9a441)), 1.2);
-      I(new T.Mesh(new T.BoxGeometry(0.014, 0.016, 0.0155).translate(0.027, 0.0165, 0), toon(bodyCol)));
-      I(new T.Mesh(new T.BoxGeometry(0.016, 0.0024, 0.0175).translate(0.027, 0.0267, 0), toon(0x3a2a30)));
-      for (const z of [-1, 1]) N(new T.Mesh(new T.BoxGeometry(0.006, 0.005, 0.0006).translate(0.027, 0.019, z * 0.0078), toon(0xfff1a8)));
-      I(new T.Mesh(new T.BoxGeometry(0.052, 0.003, 0.012).translate(0.044, 0.0065, 0), toon(0x2f2a36)), 1.1);
-      for (const x of [0.036, 0.049, 0.0615]) for (const z of [-1, 1]) wheel(x, z * 0.0062, 0.0052);
-      I(new T.Mesh(new T.ConeGeometry(0.0062, 0.012, 3).rotateZ(-Math.PI / 2).translate(0.0755, 0.0065, 0), toon(0x2f2a36)), 1.15);
-      N(new T.Mesh(new T.SphereGeometry(0.0022, 6, 5).translate(0.0712, 0.0215, 0), toon(0xffe27a)));
+    unit(0.0465, 0.031, (addInked, addPlain, wheel) => {
+      addInked(new T.Mesh(cyl(0.0075, 0.0075, 0.034).rotateZ(Math.PI / 2).translate(0.052, 0.0155, 0), toon(bodyCol)));               // boiler
+      addPlain(new T.Mesh(cyl(0.0078, 0.0078, 0.002).rotateZ(Math.PI / 2).translate(0.0695, 0.0155, 0), toon(0x2a2a30)));             // boiler front
+      addInked(new T.Mesh(new T.CylinderGeometry(0.0022, 0.003, 0.011, 8).translate(0.062, 0.0285, 0), toon(0x2a2a30)), 1.2);        // funnel
+      addPlain(new T.Mesh(new T.CylinderGeometry(0.0042, 0.0025, 0.003, 8).translate(0.062, 0.0355, 0), toon(0x1a1a1e)));             // funnel top
+      addInked(new T.Mesh(new T.SphereGeometry(0.0034, 8, 6).translate(0.048, 0.0238, 0), toon(0xd9a441)), 1.2);                     // brass dome
+      addInked(new T.Mesh(new T.BoxGeometry(0.014, 0.016, 0.0155).translate(0.027, 0.0165, 0), toon(bodyCol)));                      // cab
+      addInked(new T.Mesh(new T.BoxGeometry(0.016, 0.0024, 0.0175).translate(0.027, 0.0267, 0), toon(0x3a2a30)));                    // cab roof
+      for (const side of [-1, 1]) addPlain(new T.Mesh(new T.BoxGeometry(0.006, 0.005, 0.0006).translate(0.027, 0.019, side * 0.0078), toon(0xfff1a8)));   // cab windows
+      addInked(new T.Mesh(new T.BoxGeometry(0.052, 0.003, 0.012).translate(0.044, 0.0065, 0), toon(0x2f2a36)), 1.1);                // chassis
+      for (const x of [0.036, 0.049, 0.0615]) for (const side of [-1, 1]) wheel(x, side * 0.0062, 0.0052);
+      addInked(new T.Mesh(new T.ConeGeometry(0.0062, 0.012, 3).rotateZ(-Math.PI / 2).translate(0.0755, 0.0065, 0), toon(0x2f2a36)), 1.15);   // cow catcher
+      addPlain(new T.Mesh(new T.SphereGeometry(0.0022, 6, 5).translate(0.0712, 0.0215, 0), toon(0xffe27a)));                         // headlamp
     });
     // tender with a pile of coal
-    unit(0.004, 0.0105, (I, N, wheel) => {
-      I(new T.Mesh(new T.BoxGeometry(0.02, 0.011, 0.0145).translate(0.004, 0.0105, 0), toon(0x2f2a36)));
-      N(new T.Mesh(new T.SphereGeometry(0.0072, 8, 6).scale(1.3, 0.55, 1).translate(0.004, 0.0165, 0), toon(0x1a1a1e)));
-      for (const x of [-0.002, 0.01]) for (const z of [-1, 1]) wheel(x, z * 0.0062, 0.0042);
-      N(new T.Mesh(new T.BoxGeometry(0.006, 0.0015, 0.0015).translate(-0.0085, 0.0055, 0), toon(0x2a2a30)));
+    unit(0.004, 0.0105, (addInked, addPlain, wheel) => {
+      addInked(new T.Mesh(new T.BoxGeometry(0.02, 0.011, 0.0145).translate(0.004, 0.0105, 0), toon(0x2f2a36)));
+      addPlain(new T.Mesh(new T.SphereGeometry(0.0072, 8, 6).scale(1.3, 0.55, 1).translate(0.004, 0.0165, 0), toon(0x1a1a1e)));        // the coal
+      for (const x of [-0.002, 0.01]) for (const side of [-1, 1]) wheel(x, side * 0.0062, 0.0042);
+      addPlain(new T.Mesh(new T.BoxGeometry(0.006, 0.0015, 0.0015).translate(-0.0085, 0.0055, 0), toon(0x2a2a30)));                  // coupling
     });
     // three carriages
-    carCols.forEach((cc, i) => {
+    carCols.forEach((carColor, i) => {
       const cx = -0.026 - i * 0.029;
-      unit(cx, 0.0125, (I, N, wheel) => {
-        I(new T.Mesh(new T.BoxGeometry(0.025, 0.012, 0.0135).translate(cx, 0.0105, 0), toon(cc)));
-        I(new T.Mesh(new T.BoxGeometry(0.0268, 0.003, 0.0148).translate(cx, 0.0181, 0), toon(0x8a3a52)), 1.1);
-        N(new T.Mesh(new T.BoxGeometry(0.025, 0.0025, 0.011).translate(cx, 0.0045, 0), toon(0x2f2a36)));
-        for (const z of [-1, 1]) for (const dx of [-0.008, 0, 0.008]) N(new T.Mesh(new T.BoxGeometry(0.0042, 0.0042, 0.0006).translate(cx + dx, 0.0118, z * 0.00685), toon(0xfff1a8)));
-        for (const dx of [-0.008, 0.008]) for (const z of [-1, 1]) wheel(cx + dx, z * 0.0058, 0.0038);
-        N(new T.Mesh(new T.BoxGeometry(0.006, 0.0015, 0.0015).translate(cx + 0.0135, 0.0055, 0), toon(0x2a2a30)));
+      unit(cx, 0.0125, (addInked, addPlain, wheel) => {
+        addInked(new T.Mesh(new T.BoxGeometry(0.025, 0.012, 0.0135).translate(cx, 0.0105, 0), toon(carColor)));
+        addInked(new T.Mesh(new T.BoxGeometry(0.0268, 0.003, 0.0148).translate(cx, 0.0181, 0), toon(0x8a3a52)), 1.1);                // roof
+        addPlain(new T.Mesh(new T.BoxGeometry(0.025, 0.0025, 0.011).translate(cx, 0.0045, 0), toon(0x2f2a36)));                      // chassis
+        for (const side of [-1, 1]) for (const dx of [-0.008, 0, 0.008]) addPlain(new T.Mesh(new T.BoxGeometry(0.0042, 0.0042, 0.0006).translate(cx + dx, 0.0118, side * 0.00685), toon(0xfff1a8)));   // windows
+        for (const dx of [-0.008, 0.008]) for (const side of [-1, 1]) wheel(cx + dx, side * 0.0058, 0.0038);
+        addPlain(new T.Mesh(new T.BoxGeometry(0.006, 0.0015, 0.0015).translate(cx + 0.0135, 0.0055, 0), toon(0x2a2a30)));            // coupling
       });
     });
     return units;
   }
+  // One entry per train: name, driver, cargo out and back, and the log shown on its card ({from} and {to} are replaced).
   const TRAIN_SPECS = [
     { name: 'The Chuffington Flyer', captain: 'Driver Ada Coalbrook',
       out: '300 sacks of coal and one very smug pigeon', back: '300 sacks of slightly less coal, and a pigeon with opinions',
@@ -2100,233 +2112,360 @@ function build() {
       logs: ['Day 1: Left {from}. Old Wheezy coughed twice and got going. She always does.', 'Day 4: The cello played. The engine joined in. It was nearly a tune.', 'Day 8: {to} at last. The passengers are asleep. The cello is not.'],
       blogs: ['Wheezing back to {to}. The cello has been named Gerald. (Not the same Gerald.)', 'Fergus claims Old Wheezy has never been late. She has simply arrived at a different time.'] },
   ];
-  const trainBodies = [0xc0392b, 0x2e8b57, 0x2f6fb0, 0x7a4fb0], carSets = [[0xffd23f, 0xff9f43, 0xffd23f], [0xff9ff3, 0x4ecdc4, 0xff9ff3], [0xff6b6b, 0xffd23f, 0x4ecdc4], [0x9b7bff, 0xff9f43, 0x7ed957]];
-  const puffMat = partShader(T.NormalBlending), puffSys = [];
+  const trainBodies = [0xc0392b, 0x2e8b57, 0x2f6fb0, 0x7a4fb0];   // locomotive colours
+  const carSets = [[0xffd23f, 0xff9f43, 0xffd23f], [0xff9ff3, 0x4ecdc4, 0xff9ff3], [0xff6b6b, 0xffd23f, 0x4ecdc4], [0x9b7bff, 0xff9f43, 0x7ed957]];   // carriage colours, per train
+  const puffMat = partShader(T.NormalBlending), puffSys = [];   // steam puffs: one shared material, one particle pool per train
   {
     // pick train routes: the longest runs through the tree of lines, each end used once if possible
-    const adj = new Map(); rail.cities.forEach(c => adj.set(c, []));
-    rail.edges.forEach(e => { adj.get(e.a).push({ to: e.b, e, fwd: true }); adj.get(e.b).push({ to: e.a, e, fwd: false }); });
-    const treePath = (s, t) => {
-      const prev = new Map([[s, null]]), q = [s];
-      while (q.length) { const c = q.shift(); if (c === t) break; for (const h of adj.get(c)) if (!prev.has(h.to)) { prev.set(h.to, { from: c, h }); q.push(h.to); } }
-      if (!prev.has(t)) return null;
-      const steps = []; for (let c = t; prev.get(c); c = prev.get(c).from) steps.push(prev.get(c).h); steps.reverse(); return steps;
+    const adjacency = new Map();     // city -> the lines leaving it: [{ to: other city, e: the track, fwd: does the track run this way }]
+    rail.cities.forEach(city => adjacency.set(city, []));
+    rail.edges.forEach(edge => {
+      adjacency.get(edge.a).push({ to: edge.b, e: edge, fwd: true });
+      adjacency.get(edge.b).push({ to: edge.a, e: edge, fwd: false });
+    });
+    // The list of track steps from city `start` to city `target` through the network (breadth-first search), or null.
+    const treePath = (start, target) => {
+      const previous = new Map([[start, null]]), queue = [start];
+      while (queue.length) {
+        const city = queue.shift();
+        if (city === target) break;
+        for (const step of adjacency.get(city)) if (!previous.has(step.to)) { previous.set(step.to, { from: city, h: step }); queue.push(step.to); }
+      }
+      if (!previous.has(target)) return null;
+      const steps = [];
+      for (let city = target; previous.get(city); city = previous.get(city).from) steps.push(previous.get(city).h);
+      steps.reverse();
+      return steps;
     };
-    const stepsPts = steps => { let all = []; for (const h of steps) { const p = h.fwd ? h.e.pts : h.e.pts.slice().reverse(); all = all.concat(all.length ? p.slice(1) : p); } return all; };
+    // Joins the tracks of a list of steps into one path of points.
+    const stepsPts = steps => {
+      let all = [];
+      for (const step of steps) {
+        const points = step.fwd ? step.e.pts : step.e.pts.slice().reverse();
+        all = all.concat(all.length ? points.slice(1) : points);
+      }
+      return all;
+    };
+    // Every pair of cities on the network, with the smoothed route between them and its length.
     const pairs = [];
     for (let i = 0; i < rail.cities.length; i++) for (let j = i + 1; j < rail.cities.length; j++) {
-      const st = treePath(rail.cities[i], rail.cities[j]); if (!st) continue;
-      const pts = resamplePts(relaxCurves(resamplePts(stepsPts(st), 0.004), 0.004, 0.06 * RK, 3000), SPACING); pairs.push({ A: rail.cities[i], B: rail.cities[j], pts, L: (pts.length - 1) * SPACING });
+      const steps = treePath(rail.cities[i], rail.cities[j]);
+      if (!steps) continue;
+      const pts = resamplePts(relaxCurves(resamplePts(stepsPts(steps), 0.004), 0.004, 0.06 * RK, 3000), SPACING);
+      pairs.push({ A: rail.cities[i], B: rail.cities[j], pts, L: (pts.length - 1) * SPACING });
     }
-    pairs.sort((a, b) => b.L - a.L);
+    pairs.sort((a, b) => b.L - a.L);                                // longest first
+    // Choose the longest pairs, letting each city be an end of at most 1 train at first, then 2, then 3.
     const useCount = new Map(), chosen = [];
-    for (const lim of [1, 2, 3]) {
-      for (const p of pairs) { if (chosen.length >= TRAIN_SPECS.length) break; if (chosen.includes(p)) continue; if ((useCount.get(p.A) || 0) >= lim || (useCount.get(p.B) || 0) >= lim) continue; if (p.L < 0.25) continue; chosen.push(p); useCount.set(p.A, (useCount.get(p.A) || 0) + 1); useCount.set(p.B, (useCount.get(p.B) || 0) + 1); }
+    for (const limit of [1, 2, 3]) {
+      for (const pair of pairs) {
+        if (chosen.length >= TRAIN_SPECS.length) break;
+        if (chosen.includes(pair)) continue;
+        if ((useCount.get(pair.A) || 0) >= limit || (useCount.get(pair.B) || 0) >= limit) continue;
+        if (pair.L < 0.25) continue;                                // too short to be worth a train
+        chosen.push(pair);
+        useCount.set(pair.A, (useCount.get(pair.A) || 0) + 1);
+        useCount.set(pair.B, (useCount.get(pair.B) || 0) + 1);
+      }
     }
-    chosen.forEach((p, ti) => {
-      const spec = TRAIN_SPECS[ti], g = new T.Group(), units = makeTrain(trainBodies[ti % 4], carSets[ti % 4]);
-      units.forEach(u => { u.piv.scale.setScalar(K * 1.05); planetGroup.add(u.piv); });
-      const hit = new T.Mesh(new T.SphereGeometry(0.04, 8, 6), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false })); hit.position.y = 0.02;
-      g.add(hit); planetGroup.add(g);
-      const b = { spec, A: p.A, B: p.B, pts: p.pts, L: p.L, speed: 0.05 + ti * 0.004, off: ti * 23.7, g, n: new T.Vector3(), cur: {}, rail: true, units };
-      hit.userData = { kind: 'boat', ref: b }; pickables.push(hit);
-      boats.push(b);
-      // steam puffs
-      const N = 40, A = { pos: new Float32Array(N * 3), col: new Float32Array(N * 3), size: new Float32Array(N), alpha: new Float32Array(N) };
-      const geo = new T.BufferGeometry();
-      geo.setAttribute('position', new T.BufferAttribute(A.pos, 3)); geo.setAttribute('color', new T.BufferAttribute(A.col, 3)); geo.setAttribute('size', new T.BufferAttribute(A.size, 1)); geo.setAttribute('alpha', new T.BufferAttribute(A.alpha, 1));
-      const pts2 = new T.Points(geo, puffMat); pts2.frustumCulled = false; planetGroup.add(pts2);
-      puffSys.push({ b, N, A, geo, vel: new Float32Array(N * 3), life: new Float32Array(N), max: new Float32Array(N), next: 0, acc: 0 });
+    chosen.forEach((pair, trainIndex) => {
+      const spec = TRAIN_SPECS[trainIndex], trainGroup = new T.Group(), units = makeTrain(trainBodies[trainIndex % 4], carSets[trainIndex % 4]);
+      units.forEach(unit => { unit.piv.scale.setScalar(K * 1.05); planetGroup.add(unit.piv); });
+      // An invisible sphere that you can click or tap (it follows the locomotive).
+      const hitSphere = new T.Mesh(new T.SphereGeometry(0.04, 8, 6), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+      hitSphere.position.y = 0.02;
+      trainGroup.add(hitSphere);
+      planetGroup.add(trainGroup);
+      // Trains use the same fields as boats (see above), plus rail: true and their units.
+      const train = { spec, A: pair.A, B: pair.B, pts: pair.pts, L: pair.L, speed: 0.05 + trainIndex * 0.004, off: trainIndex * 23.7, g: trainGroup, n: new T.Vector3(), cur: {}, rail: true, units };
+      hitSphere.userData = { kind: 'boat', ref: train };
+      pickables.push(hitSphere);
+      boats.push(train);
+      // steam puffs: a pool of 40 point sprites per train
+      const count = 40;
+      const attributes = { pos: new Float32Array(count * 3), col: new Float32Array(count * 3), size: new Float32Array(count), alpha: new Float32Array(count) };
+      const geometry = new T.BufferGeometry();
+      geometry.setAttribute('position', new T.BufferAttribute(attributes.pos, 3));
+      geometry.setAttribute('color', new T.BufferAttribute(attributes.col, 3));
+      geometry.setAttribute('size', new T.BufferAttribute(attributes.size, 1));
+      geometry.setAttribute('alpha', new T.BufferAttribute(attributes.alpha, 1));
+      const puffPoints = new T.Points(geometry, puffMat);
+      puffPoints.frustumCulled = false;
+      planetGroup.add(puffPoints);
+      puffSys.push({ b: train, N: count, A: attributes, geo: geometry, vel: new Float32Array(count * 3), life: new Float32Array(count), max: new Float32Array(count), next: 0, acc: 0 });
     });
   }
-  const _pv = new T.Vector3();
+  const chimneyPosition = new T.Vector3();
+  // every frame: puff steam out of each chimney (lots when moving, a little when at the station; none outside the steam age) and drift the puffs up
   tickers.push((t, dt) => {
     puffMat.uniforms.uScale.value = innerHeight * 0.5 * renderer.getPixelRatio() / Math.tan(camera.fov * Math.PI / 360) / 2.3;
-    for (const S of puffSys) {
-      const b = S.b, moving = !b.cur.docked;
-      S.acc += (AGE !== 'steam' ? 0 : moving ? 10 : 1.5) * dt;
-      while (S.acc >= 1) {
-        S.acc--; const i = S.next; S.next = (S.next + 1) % S.N;
-        _pv.set(0.062 * K * 1.05, 0.037 * K * 1.05, 0); b.g.localToWorld(_pv);
-        S.A.pos.set([_pv.x, _pv.y, _pv.z], i * 3);
-        const up = R(0.02, 0.04);
-        S.vel[i * 3] = b.n.x * up + R(-0.006, 0.006); S.vel[i * 3 + 1] = b.n.y * up + R(-0.006, 0.006); S.vel[i * 3 + 2] = b.n.z * up + R(-0.006, 0.006);
-        S.life[i] = S.max[i] = R(1.2, 2.0);
+    for (const system of puffSys) {
+      const train = system.b, moving = !train.cur.docked;
+      system.acc += (AGE !== 'steam' ? 0 : moving ? 10 : 1.5) * dt;
+      while (system.acc >= 1) {
+        system.acc--;
+        const slot = system.next;
+        system.next = (system.next + 1) % system.N;
+        chimneyPosition.set(0.062 * K * 1.05, 0.037 * K * 1.05, 0);
+        train.g.localToWorld(chimneyPosition);
+        system.A.pos.set([chimneyPosition.x, chimneyPosition.y, chimneyPosition.z], slot * 3);
+        const upSpeed = R(0.02, 0.04);
+        system.vel[slot * 3] = train.n.x * upSpeed + R(-0.006, 0.006);
+        system.vel[slot * 3 + 1] = train.n.y * upSpeed + R(-0.006, 0.006);
+        system.vel[slot * 3 + 2] = train.n.z * upSpeed + R(-0.006, 0.006);
+        system.life[slot] = system.max[slot] = R(1.2, 2.0);
       }
-      for (let i = 0; i < S.N; i++) {
-        if (S.life[i] <= 0) { S.A.alpha[i] = 0; continue; }
-        S.life[i] -= dt; const k = Math.max(0, S.life[i] / S.max[i]), u = 1 - k;
-        for (let a = 0; a < 3; a++) S.A.pos[i * 3 + a] += S.vel[i * 3 + a] * dt;
-        S.A.size[i] = 0.006 + u * 0.02; S.A.alpha[i] = Math.min(1, k * 2.5) * 0.8;
-        const g = 0.95 - u * 0.25; S.A.col[i * 3] = g; S.A.col[i * 3 + 1] = g; S.A.col[i * 3 + 2] = g * 1.02;
+      for (let i = 0; i < system.N; i++) {
+        if (system.life[i] <= 0) { system.A.alpha[i] = 0; continue; }
+        system.life[i] -= dt;
+        const remaining = Math.max(0, system.life[i] / system.max[i]), elapsed = 1 - remaining;
+        for (let axis = 0; axis < 3; axis++) system.A.pos[i * 3 + axis] += system.vel[i * 3 + axis] * dt;
+        system.A.size[i] = 0.006 + elapsed * 0.02;
+        system.A.alpha[i] = Math.min(1, remaining * 2.5) * 0.8;
+        const grey = 0.95 - elapsed * 0.25;
+        system.A.col[i * 3] = grey; system.A.col[i * 3 + 1] = grey; system.A.col[i * 3 + 2] = grey * 1.02;
       }
-      S.geo.attributes.position.needsUpdate = S.geo.attributes.size.needsUpdate = S.geo.attributes.alpha.needsUpdate = S.geo.attributes.color.needsUpdate = true;
+      system.geo.attributes.position.needsUpdate = system.geo.attributes.size.needsUpdate = system.geo.attributes.alpha.needsUpdate = system.geo.attributes.color.needsUpdate = true;
     }
   });
-  const DOCK = 4;
-  const _f = new T.Vector3(), _m = new T.Matrix4(), _z = new T.Vector3();
-  const _e = new T.Vector3();
+  const DOCK = 4;                                       // seconds a boat or train waits at each end
+  const forward = new T.Vector3(), basisMatrix = new T.Matrix4(), crossScratch = new T.Vector3();   // scratch objects reused every frame
+  const endTangent = new T.Vector3();
+  // The point at distance `s` along the route of boat/train `b`, written into `out` (and returned). Beyond either
+  // end of the route it carries straight on along a great circle (used for the front and back of a long train).
   const sampleAt = (b, s, out) => {
-    const n = b.pts.length;
+    const count = b.pts.length;
     if (s < 0 || s > b.L) {   // beyond the ends: carry on along the straight great circle
-      const end = s < 0 ? 0 : n - 1, inner = s < 0 ? 1 : n - 2, d = (s < 0 ? -s : s - b.L);
-      out.copy(b.pts[end]); _e.copy(b.pts[end]).sub(b.pts[inner]); _e.addScaledVector(out, -_e.dot(out)).normalize();
-      return out.multiplyScalar(Math.cos(d)).addScaledVector(_e, Math.sin(d)).normalize();
+      const end = s < 0 ? 0 : count - 1, inner = s < 0 ? 1 : count - 2, overshoot = (s < 0 ? -s : s - b.L);
+      out.copy(b.pts[end]);
+      endTangent.copy(b.pts[end]).sub(b.pts[inner]);
+      endTangent.addScaledVector(out, -endTangent.dot(out)).normalize();
+      return out.multiplyScalar(Math.cos(overshoot)).addScaledVector(endTangent, Math.sin(overshoot)).normalize();
     }
-    const f = Math.min(n - 1.001, s / SPACING), i = Math.floor(f);
-    return out.copy(b.pts[i]).lerp(b.pts[i + 1], f - i).normalize();
+    const exactIndex = Math.min(count - 1.001, s / SPACING), index = Math.floor(exactIndex);
+    return out.copy(b.pts[index]).lerp(b.pts[index + 1], exactIndex - index).normalize();
   };
-  const _uF = new T.Vector3(), _uR = new T.Vector3(), _uN = new T.Vector3(), _uH = new T.Vector3(), _uZ = new T.Vector3(), _uM = new T.Matrix4();
-  const SC = K * 1.05;
+  const axleFront = new T.Vector3(), axleRear = new T.Vector3(), unitUp = new T.Vector3(), unitHeading = new T.Vector3(), unitSide = new T.Vector3(), unitMatrix = new T.Matrix4();
+  const TRAIN_SCALE = K * 1.05;
+  // Puts every unit of train `b` on the track at distance `s` along its route, pointing the way it is travelling
+  // (`leg` is 'out' or 'back'); each unit is turned to follow the line between its front and rear axles.
   function placeTrain(b, s, leg) {
-    const dir = leg === 'out' ? 1 : -1;
-    for (const u of b.units) {
-      const sc = s + dir * u.cx * SC, h = u.half * SC * 0.8;     // front and rear axle positions on the track
-      sampleAt(b, sc + dir * h, _uF); sampleAt(b, sc - dir * h, _uR);
-      _uN.copy(_uF).add(_uR).normalize();
-      _uH.copy(_uF).sub(_uR); _uH.addScaledVector(_uN, -_uH.dot(_uN));
-      if (_uH.lengthSq() < 1e-14) continue; _uH.normalize();
-      _uM.makeBasis(_uH, _uN, _uZ.crossVectors(_uH, _uN).normalize());
-      u.piv.quaternion.setFromRotationMatrix(_uM);
-      u.piv.position.copy(_uN).multiplyScalar(1.0022);
+    const direction = leg === 'out' ? 1 : -1;
+    for (const unit of b.units) {
+      const unitDistance = s + direction * unit.cx * TRAIN_SCALE, halfLength = unit.half * TRAIN_SCALE * 0.8;     // front and rear axle positions on the track
+      sampleAt(b, unitDistance + direction * halfLength, axleFront);
+      sampleAt(b, unitDistance - direction * halfLength, axleRear);
+      unitUp.copy(axleFront).add(axleRear).normalize();
+      unitHeading.copy(axleFront).sub(axleRear);
+      unitHeading.addScaledVector(unitUp, -unitHeading.dot(unitUp));
+      if (unitHeading.lengthSq() < 1e-14) continue;
+      unitHeading.normalize();
+      unitMatrix.makeBasis(unitHeading, unitUp, unitSide.crossVectors(unitHeading, unitUp).normalize());
+      unit.piv.quaternion.setFromRotationMatrix(unitMatrix);
+      unit.piv.position.copy(unitUp).multiplyScalar(1.0022);
     }
   }
+  // Moves boat/train `b` to where it should be at time `t`: out along its route, docked for DOCK seconds, back, docked again, and repeat.
+  // Also records where it is in b.cur: s (distance along), leg, docked, prog (0..1 along this leg), eta (seconds to arrival), idx (route point).
   function updateBoat(b, t) {
-    const T1 = b.L / b.speed, cyc = 2 * (T1 + DOCK), p = (t + b.off) % cyc;
+    const legTime = b.L / b.speed, cycleTime = 2 * (legTime + DOCK), cyclePosition = (t + b.off) % cycleTime;
     let s, leg, docked = false;
-    if (p < T1) { s = p * b.speed; leg = 'out'; }
-    else if (p < T1 + DOCK) { s = b.L; leg = 'out'; docked = true; }
-    else if (p < 2 * T1 + DOCK) { s = b.L - (p - T1 - DOCK) * b.speed; leg = 'back'; }
+    if (cyclePosition < legTime) { s = cyclePosition * b.speed; leg = 'out'; }
+    else if (cyclePosition < legTime + DOCK) { s = b.L; leg = 'out'; docked = true; }
+    else if (cyclePosition < 2 * legTime + DOCK) { s = b.L - (cyclePosition - legTime - DOCK) * b.speed; leg = 'back'; }
     else { s = 0; leg = 'back'; docked = true; }
     sampleAt(b, s, b.n);
-    const ahead = sampleAt(b, Math.min(b.L, Math.max(0, s + (leg === 'out' ? 0.02 : -0.02))), _f);
-    _f.sub(b.n); if (leg === 'back' && s <= 0.001) _f.negate(); _f.addScaledVector(b.n, -_f.dot(b.n));
-    if (_f.lengthSq() < 1e-12) _f.set(1, 0, 0).addScaledVector(b.n, -b.n.x);
-    _f.normalize();
-    _m.makeBasis(_f, b.n, _z.crossVectors(_f, b.n).normalize());
-    b.g.quaternion.setFromRotationMatrix(_m);
+    // facing: toward a point a little further along the route
+    const ahead = sampleAt(b, Math.min(b.L, Math.max(0, s + (leg === 'out' ? 0.02 : -0.02))), forward);
+    forward.sub(b.n);
+    if (leg === 'back' && s <= 0.001) forward.negate();
+    forward.addScaledVector(b.n, -forward.dot(b.n));
+    if (forward.lengthSq() < 1e-12) forward.set(1, 0, 0).addScaledVector(b.n, -b.n.x);
+    forward.normalize();
+    basisMatrix.makeBasis(forward, b.n, crossScratch.crossVectors(forward, b.n).normalize());
+    b.g.quaternion.setFromRotationMatrix(basisMatrix);
     if (b.rail) { b.g.position.copy(b.n).multiplyScalar(1.0022); placeTrain(b, s, leg); }
-    else { b.g.position.copy(b.n).multiplyScalar(1.003 + Math.sin(t * 2 + b.off) * 0.0015); b.g.rotateZ(Math.sin(t * 1.7 + b.off) * 0.07); }
-    const prog = leg === 'out' ? s / b.L : 1 - s / b.L;
-    Object.assign(b.cur, { s, leg, docked, prog, eta: (leg === 'out' ? b.L - s : s) / b.speed, idx: Math.floor(s / SPACING) });
+    else { b.g.position.copy(b.n).multiplyScalar(1.003 + Math.sin(t * 2 + b.off) * 0.0015); b.g.rotateZ(Math.sin(t * 1.7 + b.off) * 0.07); }   // ships bob on the waves
+    const progress = leg === 'out' ? s / b.L : 1 - s / b.L;
+    Object.assign(b.cur, { s, leg, docked, prog: progress, eta: (leg === 'out' ? b.L - s : s) / b.speed, idx: Math.floor(s / SPACING) });
   }
-  let nowT = 0;
+  let nowT = 0;   // the latest animation time, so a boat can be updated the moment it is selected
   tickers.push((t) => { nowT = t; for (const b of boats) updateBoat(b, t); });
 
   /* selected boat: name tag, story card, dotted past/future route, camera follow */
-  const dotTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 32; const x = c.getContext('2d'); x.fillStyle = '#fff'; x.beginPath(); x.arc(16, 16, 13, 0, 6.2832); x.fill(); return new T.CanvasTexture(c); })();
-  const tag = document.createElement('div'); tag.className = 'label boat'; tag.style.display = 'none'; document.body.appendChild(tag);
-  let sel = null, lastKey = '', lastEta = -1;
-  const fmt = s => { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+  const dotTex = (() => {   // a white dot for the route markers
+    const dotCanvas = document.createElement('canvas');
+    dotCanvas.width = dotCanvas.height = 32;
+    const dotContext = dotCanvas.getContext('2d');
+    dotContext.fillStyle = '#fff';
+    dotContext.beginPath();
+    dotContext.arc(16, 16, 13, 0, 6.2832);
+    dotContext.fill();
+    return new T.CanvasTexture(dotCanvas);
+  })();
+  const tag = document.createElement('div');                // the name tag that follows the selected boat
+  tag.className = 'label boat';
+  tag.style.display = 'none';
+  document.body.appendChild(tag);
+  let selectedBoat = null, lastKey = '', lastEta = -1;       // selectedBoat: { b, n, past, future } or null; lastKey/lastEta stop the card being redrawn needlessly
+  const fmt = seconds => { seconds = Math.max(0, Math.round(seconds)); return Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0'); };   // seconds -> m:ss
+  // Shows (or refreshes) the story card of boat/train `b`: captain, route, cargo and the current line of its log.
+  // The text only changes when the leg or log entry changes (or `force`); otherwise just the arrival countdown is updated.
   function boatCard(b, force) {
-    const c = b.cur, from = c.leg === 'out' ? b.A.name : b.B.name, to = c.leg === 'out' ? b.B.name : b.A.name;
-    const logs = (c.leg === 'out' ? b.spec.logs : b.spec.blogs), li = Math.min(logs.length - 1, Math.floor(c.prog * logs.length));
-    const key = c.leg + (c.docked ? 'd' : li);
-    if (key === lastKey && !force) { if (Math.abs(c.eta - lastEta) >= 1) { lastEta = c.eta; const e = card.querySelector('.eta'); if (e) e.textContent = c.docked ? 'docked' : fmt(c.eta); } return; }
-    lastKey = key; lastEta = c.eta;
-    const cargo = c.leg === 'out' ? b.spec.out : b.spec.back;
-    const story = c.docked ? `Docked at ${c.leg === 'out' ? b.B.name : b.A.name}. ${b.rail ? 'The passengers are stretching their legs and having a cup of tea.' : 'The crew are unloading and having a cup of tea.'}` : logs[li].replace('{from}', from).replace('{to}', to);
+    const current = b.cur, from = current.leg === 'out' ? b.A.name : b.B.name, to = current.leg === 'out' ? b.B.name : b.A.name;
+    const logs = (current.leg === 'out' ? b.spec.logs : b.spec.blogs), logIndex = Math.min(logs.length - 1, Math.floor(current.prog * logs.length));
+    const key = current.leg + (current.docked ? 'd' : logIndex);
+    if (key === lastKey && !force) {
+      if (Math.abs(current.eta - lastEta) >= 1) {
+        lastEta = current.eta;
+        const etaElement = card.querySelector('.eta');
+        if (etaElement) etaElement.textContent = current.docked ? 'docked' : fmt(current.eta);
+      }
+      return;
+    }
+    lastKey = key;
+    lastEta = current.eta;
+    const cargo = current.leg === 'out' ? b.spec.out : b.spec.back;
+    const story = current.docked
+      ? `Docked at ${current.leg === 'out' ? b.B.name : b.A.name}. ${b.rail ? 'The passengers are stretching their legs and having a cup of tea.' : 'The crew are unloading and having a cup of tea.'}`
+      : logs[logIndex].replace('{from}', from).replace('{to}', to);
     cardH.textContent = b.spec.name;
     if (force) { stopCloseup(); card.classList.remove('pic'); cardBody.scrollTop = 0; }   // no landmark close-up picture on a boat's card
     cardBody.innerHTML = `<p><span class="meta">${b.spec.captain}</span><br>` +
-      `<b>Route:</b> ${from} → ${to} · arriving <span class="eta">${c.docked ? 'docked' : fmt(c.eta)}</span><br>` +
+      `<b>Route:</b> ${from} → ${to} · arriving <span class="eta">${current.docked ? 'docked' : fmt(current.eta)}</span><br>` +
       `<b>Carrying:</b> ${cargo}<br><i>${story}</i></p>`;
-    card.classList.add('on'); card.dataset.boat = '1';
+    card.classList.add('on');
+    card.dataset.boat = '1';
   }
+  // Deselects the boat: removes its dotted route and name tag, and (if hideCard) closes its card.
   function clearBoat(hideCard) {
-    if (!sel) return;
-    planetGroup.remove(sel.past, sel.future); sel.past.geometry.dispose(); sel.future.geometry.dispose();
-    sel = null; tag.style.display = 'none';
+    if (!selectedBoat) return;
+    planetGroup.remove(selectedBoat.past, selectedBoat.future);
+    selectedBoat.past.geometry.dispose();
+    selectedBoat.future.geometry.dispose();
+    selectedBoat = null;
+    tag.style.display = 'none';
     if (hideCard && card.dataset.boat) card.classList.remove('on');
     delete card.dataset.boat;
   }
+  // Selects a boat/train: dotted route (faint behind it, bright ahead), name tag, story card, and the camera follows it.
   function selectBoat(b) {
-    if (sel && sel.b === b) { setFocus(b.n, 1.7); return; }
+    if (selectedBoat && selectedBoat.b === b) { setFocus(b.n, 1.7); return; }     // already selected: just look at it again
     clearBoat(false);
-    const dots = []; for (let i = 0; i < b.pts.length; i += 3) dots.push(b.pts[i]);
-    const arr = new Float32Array(dots.length * 3); dots.forEach((v, i) => v.clone().multiplyScalar(1.007).toArray(arr, i * 3));
-    const attr = new T.BufferAttribute(arr, 3), mk = (op, size) => {
-      const g = new T.BufferGeometry(); g.setAttribute('position', attr);
-      const p = new T.Points(g, new T.PointsMaterial({ map: dotTex, color: 0xffffff, size, sizeAttenuation: false, transparent: true, opacity: op, alphaTest: 0.25, depthWrite: false }));
-      p.frustumCulled = false; p.renderOrder = 4; planetGroup.add(p); return p;
+    const dots = [];
+    for (let i = 0; i < b.pts.length; i += 3) dots.push(b.pts[i]);                // one dot for every third route point
+    const dotPositions = new Float32Array(dots.length * 3);
+    dots.forEach((v, i) => v.clone().multiplyScalar(1.007).toArray(dotPositions, i * 3));
+    const positionAttribute = new T.BufferAttribute(dotPositions, 3);
+    // Two Points objects sharing the same dots: `past` (faint, small) and `future` (bright, bigger); each tick sets which dots each one draws.
+    const makeDots = (opacity, size) => {
+      const geometry = new T.BufferGeometry();
+      geometry.setAttribute('position', positionAttribute);
+      const points = new T.Points(geometry, new T.PointsMaterial({ map: dotTex, color: 0xffffff, size, sizeAttenuation: false, transparent: true, opacity, alphaTest: 0.25, depthWrite: false }));
+      points.frustumCulled = false;
+      points.renderOrder = 4;
+      planetGroup.add(points);
+      return points;
     };
-    sel = { b, n: dots.length, past: mk(0.45, 5), future: mk(1, 7) };
-    tag.textContent = b.spec.name; tag.style.display = 'block'; lastKey = ''; setFocus(b.n, 1.7);
-    updateBoat(b, nowT); boatCard(b, true);
+    selectedBoat = { b, n: dots.length, past: makeDots(0.45, 5), future: makeDots(1, 7) };
+    tag.textContent = b.spec.name;
+    tag.style.display = 'block';
+    lastKey = '';
+    setFocus(b.n, 1.7);
+    updateBoat(b, nowT);
+    boatCard(b, true);
   }
-  const _c = new T.Vector3();
+  const tagPosition = new T.Vector3();
+  // every frame while a boat is selected: split the dotted route into past and future at the boat, refresh its card, move the name tag
   tickers.push((t, dt) => {
-    if (!sel) return;
-    const b = sel.b, c = b.cur;
-    const k = Math.min(sel.n, Math.floor(c.idx / 3));
-    const outLeg = c.leg === 'out';
-    sel.past.geometry.setDrawRange(outLeg ? 0 : k, outLeg ? k : sel.n - k);
-    sel.future.geometry.setDrawRange(outLeg ? k : 0, outLeg ? sel.n - k : k);
+    if (!selectedBoat) return;
+    const b = selectedBoat.b, current = b.cur;
+    const dotsPassed = Math.min(selectedBoat.n, Math.floor(current.idx / 3));
+    const outLeg = current.leg === 'out';
+    selectedBoat.past.geometry.setDrawRange(outLeg ? 0 : dotsPassed, outLeg ? dotsPassed : selectedBoat.n - dotsPassed);
+    selectedBoat.future.geometry.setDrawRange(outLeg ? dotsPassed : 0, outLeg ? selectedBoat.n - dotsPassed : dotsPassed);
     boatCard(b, false);
     // name tag next to the boat
-    _c.copy(b.g.position).project(camera);
+    tagPosition.copy(b.g.position).project(camera);
     const facing = b.n.dot(camera.position) - 1;
-    tag.style.opacity = facing > 0.02 ? 1 : 0;
-    tag.style.transform = `translate(${(_c.x * .5 + .5) * innerWidth + 20}px,${(-_c.y * .5 + .5) * innerHeight}px) translate(0,-50%)`;
+    tag.style.opacity = facing > 0.02 ? 1 : 0;      // hide it when the boat is round the back of the planet
+    tag.style.transform = `translate(${(tagPosition.x * .5 + .5) * innerWidth + 20}px,${(-tagPosition.y * .5 + .5) * innerHeight}px) translate(0,-50%)`;
   });
   console.log('boats', boats.map(b => b.spec.name + ': ' + b.A.name + ' -> ' + b.B.name + ' L=' + b.L.toFixed(2)).join(' | '), 'ports', ports.length);
-  // whales
+  // whales: now and then a whale spouts at a random deep-sea spot: a blue spout shoots up and a ring spreads on the water
   const whales = [];
-  for (let w = 0; w < 6; w++) {
-    const n = oceanPt(0.25, 1, 0.5); if (!n) continue;
-    const g = new T.Group();
+  for (let whaleIndex = 0; whaleIndex < 6; whaleIndex++) {
+    const spot = oceanPt(0.25, 1, 0.5);
+    if (!spot) continue;
+    const whaleGroup = new T.Group();
     const stem = withInk(new T.Mesh(new T.CylinderGeometry(0.006, 0.011, 0.05, 8).translate(0, 0.025, 0), toon(0x4a63d8)), 1.2);
-    const fl = (s) => { const f = withInk(new T.Mesh(new T.ConeGeometry(0.02, 0.03, 3).scale(1, 1, 0.3), toon(0x4a63d8)), 1.2); f.rotation.z = s * 1.0; f.position.set(s * 0.012, 0.058, 0); return f; };
-    g.add(stem, fl(1), fl(-1));
+    // One of the two curved "fins" at the top of the spout; side is -1 or 1.
+    const fin = (side) => {
+      const finMesh = withInk(new T.Mesh(new T.ConeGeometry(0.02, 0.03, 3).scale(1, 1, 0.3), toon(0x4a63d8)), 1.2);
+      finMesh.rotation.z = side * 1.0;
+      finMesh.position.set(side * 0.012, 0.058, 0);
+      return finMesh;
+    };
+    whaleGroup.add(stem, fin(1), fin(-1));
     const ring = new T.Mesh(new T.RingGeometry(0.018, 0.024, 24).rotateX(-Math.PI / 2), new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthWrite: false, side: T.DoubleSide }));
-    ring.position.y = 0.002; g.add(ring);
-    placeOnSurface(g, n, 1.0, rng() * 6); g.scale.setScalar(K * 1.15);
-    planetGroup.add(g);
-    whales.push({ g, stem, ring, ph: rng() * 20, per: 9 + rng() * 5 });
+    ring.position.y = 0.002;
+    whaleGroup.add(ring);
+    placeOnSurface(whaleGroup, spot, 1.0, rng() * 6);
+    whaleGroup.scale.setScalar(K * 1.15);
+    planetGroup.add(whaleGroup);
+    whales.push({ g: whaleGroup, stem, ring, ph: rng() * 20, per: 9 + rng() * 5 });   // ph: time offset, per: seconds between spouts
   }
   tickers.push((t) => {
-    for (const w of whales) {
-      const k = ((t + w.ph) % w.per) / w.per;      // 0..1
-      const up = k < 0.22 ? Math.sin(k / 0.22 * Math.PI) : 0;
-      w.g.children.forEach(c => { if (c !== w.ring) c.visible = up > 0.02; });
-      w.g.children.forEach(c => { if (c !== w.ring) c.scale.y = Math.max(0.01, up); });
-      const rk = Math.min(1, Math.max(0, (k - 0.02) / 0.3));
-      w.ring.scale.setScalar(0.5 + rk * 2.2); w.ring.material.opacity = (1 - rk) * (rk > 0 ? 0.8 : 0);
-      w.ring.visible = rk > 0 && rk < 1;
+    for (const whale of whales) {
+      const cyclePosition = ((t + whale.ph) % whale.per) / whale.per;      // 0..1 through this whale's cycle
+      const spoutHeight = cyclePosition < 0.22 ? Math.sin(cyclePosition / 0.22 * Math.PI) : 0;       // the spout rises and falls in the first 22%
+      whale.g.children.forEach(child => { if (child !== whale.ring) child.visible = spoutHeight > 0.02; });
+      whale.g.children.forEach(child => { if (child !== whale.ring) child.scale.y = Math.max(0.01, spoutHeight); });
+      const ringProgress = Math.min(1, Math.max(0, (cyclePosition - 0.02) / 0.3));     // the ring grows and fades just after
+      whale.ring.scale.setScalar(0.5 + ringProgress * 2.2);
+      whale.ring.material.opacity = (1 - ringProgress) * (ringProgress > 0 ? 0.8 : 0);
+      whale.ring.visible = ringProgress > 0 && ringProgress < 1;
     }
   });
-  // birds
+  // birds: little flocks of 4 circling above every second or third city, flapping as they go
   const birds = [];
   const birdGeo = new T.BufferGeometry();
   birdGeo.setAttribute('position', new T.BufferAttribute(new Float32Array([0, 0, 0, -0.02, 0, 0.025, 0.005, 0, 0.0]), 3));
   birdGeo.computeVertexNormals();
   const birdMat = new T.MeshBasicMaterial({ color: 0xffffff, side: T.DoubleSide });
-  [0, 3, 6, 8, 11, 13, 16, 18].map(i => cities[i]).filter(Boolean).forEach((c, ci) => {
-    const [u, w] = perpFrame(c.n);
+  [0, 3, 6, 8, 11, 13, 16, 18].map(i => cities[i]).filter(Boolean).forEach((city, cityIndex) => {
+    const [axisA, axisB] = perpFrame(city.n);      // two directions along the ground at the city; the birds circle in this plane
     for (let i = 0; i < 4; i++) {
-      const g = new T.Group();
-      const wl = new T.Mesh(new T.PlaneGeometry(0.026, 0.012).translate(-0.013, 0, 0), birdMat);
-      const wr = new T.Mesh(new T.PlaneGeometry(0.026, 0.012).translate(0.013, 0, 0), birdMat);
-      wl.rotation.x = wr.rotation.x = -Math.PI / 2;
-      const body = new T.Mesh(new T.SphereGeometry(0.006, 6, 4), new T.MeshBasicMaterial({ color: 0xffe8a8 }));
-      g.add(wl, wr, body); g.scale.setScalar(K * 0.38); planetGroup.add(g);
-      birds.push({ g, wl, wr, c, u, w, ph: i * 0.5 + ci, rad: (0.1 + i * 0.012) * K * 1.2, sp: 0.35 + (ci % 4) * 0.05, h: 1.058 + i * 0.006 });
+      const birdGroup = new T.Group();
+      const leftWing = new T.Mesh(new T.PlaneGeometry(0.026, 0.012).translate(-0.013, 0, 0), birdMat);
+      const rightWing = new T.Mesh(new T.PlaneGeometry(0.026, 0.012).translate(0.013, 0, 0), birdMat);
+      leftWing.rotation.x = rightWing.rotation.x = -Math.PI / 2;
+      const birdBody = new T.Mesh(new T.SphereGeometry(0.006, 6, 4), new T.MeshBasicMaterial({ color: 0xffe8a8 }));
+      birdGroup.add(leftWing, rightWing, birdBody);
+      birdGroup.scale.setScalar(K * 0.38);
+      planetGroup.add(birdGroup);
+      birds.push({ g: birdGroup, wl: leftWing, wr: rightWing, c: city, u: axisA, w: axisB, ph: i * 0.5 + cityIndex, rad: (0.1 + i * 0.012) * K * 1.2, sp: 0.35 + (cityIndex % 4) * 0.05, h: 1.058 + i * 0.006 });
+      // c: its city, u/w: orbit plane, ph: starting angle, rad: orbit radius, sp: speed, h: height above the planet
     }
   });
-  const _p = new T.Vector3(), _p2 = new T.Vector3(), _ff = new T.Vector3(), _rr = new T.Vector3();
+  const birdPosition = new T.Vector3(), birdAhead = new T.Vector3(), birdForward = new T.Vector3(), birdUp = new T.Vector3();
   tickers.push((t) => {
-    for (const b of birds) {
-      const at = (a, out) => out.copy(b.c.n).addScaledVector(b.u, Math.cos(a) * b.rad).addScaledVector(b.w, Math.sin(a) * b.rad).normalize().multiplyScalar(b.h);
-      const a = t * b.sp + b.ph;
-      at(a, _p); at(a + 0.05, _p2);
-      b.g.position.copy(_p);
-      _ff.copy(_p2).sub(_p).normalize(); _rr.copy(_p).normalize();
-      _ff.addScaledVector(_rr, -_ff.dot(_rr)).normalize();
+    for (const bird of birds) {
+      // The bird's position on its circle at orbit angle `angle`.
+      const pointAt = (orbitAngle, out) => out.copy(bird.c.n).addScaledVector(bird.u, Math.cos(orbitAngle) * bird.rad).addScaledVector(bird.w, Math.sin(orbitAngle) * bird.rad).normalize().multiplyScalar(bird.h);
+      const orbitAngle = t * bird.sp + bird.ph;
+      pointAt(orbitAngle, birdPosition);
+      pointAt(orbitAngle + 0.05, birdAhead);                  // a spot slightly further round, to face toward
+      bird.g.position.copy(birdPosition);
+      birdForward.copy(birdAhead).sub(birdPosition).normalize();
+      birdUp.copy(birdPosition).normalize();
+      birdForward.addScaledVector(birdUp, -birdForward.dot(birdUp)).normalize();
       // x = side, y = up, z = forward (right-handed: x = y cross z)
-      _m.makeBasis(new T.Vector3().crossVectors(_rr, _ff), _rr, _ff);
-      b.g.quaternion.setFromRotationMatrix(_m);
-      const fl = Math.sin(t * 9 + b.ph * 5) * 0.7;
-      b.wl.rotation.z = fl; b.wr.rotation.z = -fl;
+      basisMatrix.makeBasis(new T.Vector3().crossVectors(birdUp, birdForward), birdUp, birdForward);
+      bird.g.quaternion.setFromRotationMatrix(basisMatrix);
+      const flap = Math.sin(t * 9 + bird.ph * 5) * 0.7;
+      bird.wl.rotation.z = flap;
+      bird.wr.rotation.z = -flap;
     }
   });
 
@@ -2869,7 +3008,7 @@ function build() {
     });
     window.__tiles = tiles;
   } catch (e) { console.warn('detail tiles unavailable', e); }
-  world = { P, cities, volcanoes, storms, boats, selectBoat, clearBoat, boatSelected: () => !!sel };
+  world = { P, cities, volcanoes, storms, boats, selectBoat, clearBoat, boatSelected: () => !!selectedBoat };
   if (new URLSearchParams(location.search).has('debug')) window.__np = { invade: () => { startInvasion(); return invasion; }, setAge: a => setAge(a), launch, satellites, countries, camera, controls, scene, planetGroup, boats, storms, volcanoes, cities, rail, T, tilted: () => tiltedMat };
   const q = new URLSearchParams(location.search).get('go');   // e.g. ?go=volcano | volcano2 | storm | storm2 | city3 | boat2
   if (q) setTimeout(() => { window.__noSpin = true;
