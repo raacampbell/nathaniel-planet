@@ -340,24 +340,28 @@ function craggyCone(radius, height, radialSegments, heightSegments, jitter, seed
   return geometry;
 }
 
+/* Builds the whole world: sky, planet, places (cities, volcanoes, storms...), vehicles, wildlife and the user
+   interface lists. It is one long function so that all the parts can share the same planet and city lists.
+   Returns an object of controls (set age, select boats...). */
 function build() {
-  const P = PlanetGen.createPlanet(SEED);
-  const rng = PlanetGen.mulberry32(77);
+  const P = PlanetGen.createPlanet(SEED);       // the planet's shape and biomes (see planet-gen.js)
+  const rng = PlanetGen.mulberry32(77);         // seeded random numbers, so the same places are chosen every time
 
   /* ---- the milky way: baked once into an equirectangular texture, shown on a far sky sphere ---- */
   {
-    const bn = new T.Vector3(0.42, 0.88, 0.2).normalize();
-    const e1 = new T.Vector3().crossVectors(bn, new T.Vector3(0, 0, 1)).normalize();
-    const hashFn = `float hash(vec3 p){ p=fract(p*0.3183099+.1); p*=17.0; return fract(p.x*p.y*p.z*(p.x+p.y+p.z)); }
+    const bandNormal = new T.Vector3(0.42, 0.88, 0.2).normalize();                                        // axis of the milky way band
+    const bandAxis = new T.Vector3().crossVectors(bandNormal, new T.Vector3(0, 0, 1)).normalize();        // a direction along the band
+    // GLSL noise functions (hash, vnoise, fbm) pasted into the shader below.
+    const noiseGlsl = `float hash(vec3 p){ p=fract(p*0.3183099+.1); p*=17.0; return fract(p.x*p.y*p.z*(p.x+p.y+p.z)); }
       float vnoise(vec3 x){ vec3 i=floor(x), f=fract(x); f=f*f*(3.-2.*f);
         return mix(mix(mix(hash(i),hash(i+vec3(1,0,0)),f.x), mix(hash(i+vec3(0,1,0)),hash(i+vec3(1,1,0)),f.x),f.y),
                    mix(mix(hash(i+vec3(0,0,1)),hash(i+vec3(1,0,1)),f.x), mix(hash(i+vec3(0,1,1)),hash(i+vec3(1,1,1)),f.x),f.y), f.z); }
       float fbm(vec3 p){ float s=0., a=.5; for(int i=0;i<5;i++){ s+=a*vnoise(p); p=p*2.03+vec3(1.7,9.2,3.1); a*=.5; } return s; }`;
-    const rt = new T.WebGLRenderTarget(2048, 1024, { minFilter: T.LinearFilter, magFilter: T.LinearFilter, depthBuffer: false, generateMipmaps: false });
-    const quad = new T.Mesh(new T.PlaneGeometry(2, 2), new T.ShaderMaterial({
-      uniforms: { uN: { value: bn }, uE: { value: e1 } },
+    const skyTarget = new T.WebGLRenderTarget(2048, 1024, { minFilter: T.LinearFilter, magFilter: T.LinearFilter, depthBuffer: false, generateMipmaps: false });
+    const bakeQuad = new T.Mesh(new T.PlaneGeometry(2, 2), new T.ShaderMaterial({
+      uniforms: { uN: { value: bandNormal }, uE: { value: bandAxis } },
       vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.,1.); }',
-      fragmentShader: `varying vec2 vUv; uniform vec3 uN; uniform vec3 uE; ${hashFn}
+      fragmentShader: `varying vec2 vUv; uniform vec3 uN; uniform vec3 uE; ${noiseGlsl}
         void main(){
           float lon=vUv.x*6.2831853, lat=(vUv.y-.5)*3.14159265;
           vec3 d=vec3(cos(lon)*cos(lat), sin(lat), sin(lon)*cos(lat));
@@ -374,27 +378,36 @@ function build() {
           gl_FragColor=vec4(col,1.);
         }`,
     }));
-    const qs = new T.Scene(); qs.add(quad);
-    renderer.setRenderTarget(rt); renderer.render(qs, new T.Camera()); renderer.setRenderTarget(null);
+    // Draw the quad once into the texture (this is the "baking").
+    const bakeScene = new T.Scene();
+    bakeScene.add(bakeQuad);
+    renderer.setRenderTarget(skyTarget);
+    renderer.render(bakeScene, new T.Camera());
+    renderer.setRenderTarget(null);
+    // A huge sphere around everything, seen from inside, showing the baked texture.
     const sky = new T.Mesh(new T.SphereGeometry(180, 48, 32), new T.ShaderMaterial({
-      side: T.BackSide, depthWrite: false, depthTest: false, uniforms: { tMW: { value: rt.texture } },
+      side: T.BackSide, depthWrite: false, depthTest: false, uniforms: { tMW: { value: skyTarget.texture } },
       vertexShader: 'varying vec3 vD; void main(){ vD=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
       fragmentShader: `varying vec3 vD; uniform sampler2D tMW;
         void main(){ vec3 d=normalize(vD); vec2 uv=vec2(fract(atan(d.z,d.x)/6.2831853), asin(clamp(d.y,-1.,1.))/3.14159265+0.5);
           vec3 c=texture2D(tMW,uv).rgb; c+=(fract(sin(dot(gl_FragCoord.xy,vec2(12.9898,78.233)))*43758.5453)-.5)/255.; gl_FragColor=vec4(c,1.); }`,
     }));
-    sky.renderOrder = -10; sky.frustumCulled = false; scene.add(sky);
+    sky.renderOrder = -10;      // draw before everything else
+    sky.frustumCulled = false;
+    scene.add(sky);
   }
 
   /* ---- planet surface: cartoon texture (quick low-res now, full-res from a worker) + animated waves ---- */
   const maxAniso = renderer.capabilities.getMaxAnisotropy();
   const planetMat = new T.MeshLambertMaterial({ map: null });
-  const wave = { time: { value: 0 }, mask: { value: null } };
-  planetMat.onBeforeCompile = sh => {
-    sh.uniforms.uTime = wave.time; sh.uniforms.uMask = wave.mask;
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vObj;')
+  const wave = { time: { value: 0 }, mask: { value: null } };   // shared with the shader: animation time, and where on the sea waves may be drawn
+  // Adds animated white wave marks to the planet's normal shading, only where the wave mask says there is open sea.
+  planetMat.onBeforeCompile = shader => {
+    shader.uniforms.uTime = wave.time;
+    shader.uniforms.uMask = wave.mask;
+    shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vObj;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvObj = position;');
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vObj; uniform float uTime; uniform sampler2D uMask;')
+    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vObj; uniform float uTime; uniform sampler2D uMask;')
       .replace('#include <map_fragment>', `#include <map_fragment>
       {
         vec3 q = normalize(vObj);
@@ -415,25 +428,46 @@ function build() {
         }
       }`);
   };
+  // Puts a freshly painted surface on the planet: `data` is RGBA pixels (width W, height H), `mask` is the wave mask.
+  // Old textures are freed.
   function applyTexture(W, H, data, mask) {
-    const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
-    cv.getContext('2d').putImageData(new ImageData(data, W, H), 0, 0);
-    const map = new T.CanvasTexture(cv); map.anisotropy = maxAniso;
-    const mk = new T.DataTexture(mask, W, H, T.LuminanceFormat); mk.minFilter = mk.magFilter = T.LinearFilter; mk.generateMipmaps = false; mk.needsUpdate = true;
+    const surfaceCanvas = document.createElement('canvas');
+    surfaceCanvas.width = W;
+    surfaceCanvas.height = H;
+    surfaceCanvas.getContext('2d').putImageData(new ImageData(data, W, H), 0, 0);
+    const map = new T.CanvasTexture(surfaceCanvas);
+    map.anisotropy = maxAniso;
+    const maskTexture = new T.DataTexture(mask, W, H, T.LuminanceFormat);
+    maskTexture.minFilter = maskTexture.magFilter = T.LinearFilter;
+    maskTexture.generateMipmaps = false;
+    maskTexture.needsUpdate = true;
     const oldMap = planetMat.map, oldMask = wave.mask.value;
-    planetMat.map = map; wave.mask.value = mk; planetMat.needsUpdate = true;
-    if (oldMap) oldMap.dispose(); if (oldMask) oldMask.dispose();
+    planetMat.map = map;
+    wave.mask.value = maskTexture;
+    planetMat.needsUpdate = true;
+    if (oldMap) oldMap.dispose();
+    if (oldMask) oldMask.dispose();
   }
-  { const t = P.buildTexture(1024, 512); applyTexture(t.width, t.height, t.data, t.mask); }
+  // First a quick low-resolution texture on the main thread so there is something to look at straight away...
+  { const quickTexture = P.buildTexture(1024, 512); applyTexture(quickTexture.width, quickTexture.height, quickTexture.data, quickTexture.mask); }
+  // ...then the full-resolution one, painted in a background worker (or on the main thread if workers are unavailable).
   const BIG = Math.min(4096, renderer.capabilities.maxTextureSize);
-  const bigOnMain = () => setTimeout(() => { const t = P.buildTexture(BIG, BIG / 2); applyTexture(t.width, t.height, t.data, t.mask); }, 50);
+  const bigOnMain = () => setTimeout(() => {
+    const bigTexture = P.buildTexture(BIG, BIG / 2);
+    applyTexture(bigTexture.width, bigTexture.height, bigTexture.data, bigTexture.mask);
+  }, 50);
   try {
-    const wk = new Worker('planet-worker.js');
-    wk.onmessage = e => { if (e.data.W === BIG) { applyTexture(e.data.W, e.data.H, e.data.data, e.data.mask); wk.terminate(); } };
-    wk.onerror = () => { wk.terminate(); bigOnMain(); };
-    wk.postMessage({ seed: SEED, sizes: [BIG] });
+    const textureWorker = new Worker('planet-worker.js');
+    textureWorker.onmessage = event => {
+      if (event.data.W === BIG) {
+        applyTexture(event.data.W, event.data.H, event.data.data, event.data.mask);
+        textureWorker.terminate();
+      }
+    };
+    textureWorker.onerror = () => { textureWorker.terminate(); bigOnMain(); };
+    textureWorker.postMessage({ seed: SEED, sizes: [BIG] });
   } catch (err) { bigOnMain(); }
-  tickers.push(t => { wave.time.value = t; });
+  tickers.push(t => { wave.time.value = t; });   // keep the wave animation moving
   const planet = new T.Mesh(new T.SphereGeometry(1, 192, 128), planetMat);
   planetGroup.add(planet);
 
@@ -452,74 +486,82 @@ function build() {
   scene.add(atmoIn);
 
   /* helpers to find places */
-  const nearLand = (d, r) => {
-    const a = v3(d), u = new T.Vector3().crossVectors(a, Math.abs(a.y) > 0.9 ? new T.Vector3(1, 0, 0) : UP).normalize();
-    const w = new T.Vector3().crossVectors(a, u);
+  // Is the whole circle of radius `radius` (radians) round direction `dir` ([x, y, z]) land? (Checked at 8 points.)
+  const nearLand = (dir, radius) => {
+    const centre = v3(dir);
+    const east = new T.Vector3().crossVectors(centre, Math.abs(centre.y) > 0.9 ? new T.Vector3(1, 0, 0) : UP).normalize();
+    const north = new T.Vector3().crossVectors(centre, east);
     for (let k = 0; k < 8; k++) {
-      const th = k / 8 * 6.2832;
-      const q = a.clone().addScaledVector(u, Math.cos(th) * r).addScaledVector(w, Math.sin(th) * r).normalize();
-      if (!P.isLand([q.x, q.y, q.z])) return false;
+      const theta = k / 8 * 6.2832;
+      const point = centre.clone().addScaledVector(east, Math.cos(theta) * radius).addScaledVector(north, Math.sin(theta) * radius).normalize();
+      if (!P.isLand([point.x, point.y, point.z])) return false;
     }
     return true;
   };
-  const allOcean = (d, r) => {
-    const a = v3(d), u = new T.Vector3().crossVectors(a, UP).normalize(), w = new T.Vector3().crossVectors(a, u);
-    for (const rr of [r * 0.5, r]) for (let k = 0; k < 10; k++) {
-      const th = k / 10 * 6.2832;
-      const q = a.clone().addScaledVector(u, Math.cos(th) * rr).addScaledVector(w, Math.sin(th) * rr).normalize();
-      if (P.isLand([q.x, q.y, q.z])) return false;
+  // Is the point and the whole circle round it (checked at two radii, 10 points each) open sea?
+  const allOcean = (dir, radius) => {
+    const centre = v3(dir), east = new T.Vector3().crossVectors(centre, UP).normalize(), north = new T.Vector3().crossVectors(centre, east);
+    for (const ringRadius of [radius * 0.5, radius]) for (let k = 0; k < 10; k++) {
+      const theta = k / 10 * 6.2832;
+      const point = centre.clone().addScaledVector(east, Math.cos(theta) * ringRadius).addScaledVector(north, Math.sin(theta) * ringRadius).normalize();
+      if (P.isLand([point.x, point.y, point.z])) return false;
     }
-    return !P.isLand(d);
+    return !P.isLand(dir);
   };
 
-  // candidate land points
+  // candidate land points: up to 6000 random spots on dry land (not on a thin spit), each with its height and biome
   const cand = [];
   for (let i = 0; i < 40000 && cand.length < 6000; i++) {
     const d = P.randomDir(rng);
-    if (P.isLand(d) && nearLand(d, 0.02)) cand.push({ d, n: v3(d), h: P.relHeight(d), b: P.biome(d) });
+    if (P.isLand(d) && nearLand(d, 0.02)) cand.push({ d, n: v3(d), h: P.relHeight(d), b: P.biome(d) });   // d: direction array, n: as a vector, h: relative height, b: biome
   }
 
   /* Mount Fugi: highest green hill, preferably mid-latitude. Fugette: a much smaller one far away */
   let fugi = null;
   for (const c of cand) {
-    if (c.b !== 'green' || Math.abs(c.d[1]) > 0.7 || Math.abs(c.d[1]) < 0.4) continue;
+    if (c.b !== 'green' || Math.abs(c.d[1]) > 0.7 || Math.abs(c.d[1]) < 0.4) continue;   // green and between latitudes 0.4 and 0.7
     if (!nearLand(c.d, 0.08)) continue;
     if (!fugi || c.h > fugi.h) fugi = c;
   }
-  fugi = fugi || cand.filter(c => c.b === 'green').sort((a, b) => b.h - a.h)[0] || cand[0];
+  fugi = fugi || cand.filter(c => c.b === 'green').sort((a, b) => b.h - a.h)[0] || cand[0];   // fallbacks if nothing qualified
   let fug2 = null;
   for (const c of cand) {
-    if (c.b === 'ice' || angle(c.n, fugi.n) < 1.2 || !nearLand(c.d, 0.055)) continue;
-    const sc = c.h + angle(c.n, fugi.n) * 0.05;
-    if (!fug2 || sc > fug2.sc) fug2 = { c, sc };
+    if (c.b === 'ice' || angle(c.n, fugi.n) < 1.2 || !nearLand(c.d, 0.055)) continue;           // far from Mount Fugi, not on ice
+    const score = c.h + angle(c.n, fugi.n) * 0.05;
+    if (!fug2 || score > fug2.sc) fug2 = { c, sc: score };
   }
   fug2 = fug2 ? fug2.c : cand.find(c => angle(c.n, fugi.n) > 1.0) || cand[1];
 
   /* Mount Chicken Nugget: about one Mount Fugi diameter from Mount Fugi, on dry land */
   let nug = null;
   {
-    const u = new T.Vector3().crossVectors(fugi.n, UP).normalize(), w = new T.Vector3().crossVectors(fugi.n, u), a0 = rng() * 6.28;
-    search: for (const f of [1.15, 1.3, 1.0, 1.5, 0.9, 1.8, 2.2]) {
-      const D = 0.36 * K * f;
+    // Walk round circles of several distances (in units of one Mount Fugi diameter) round Mount Fugi, starting
+    // at a random angle, and take the first dry spot that is not ice or too far north/south.
+    const east = new T.Vector3().crossVectors(fugi.n, UP).normalize(), north = new T.Vector3().crossVectors(fugi.n, east), startAngle = rng() * 6.28;
+    search: for (const distanceFactor of [1.15, 1.3, 1.0, 1.5, 0.9, 1.8, 2.2]) {
+      const arcDistance = 0.36 * K * distanceFactor;
       for (let i = 0; i < 72; i++) {
-        const th = a0 + i * 0.0873, dir = u.clone().multiplyScalar(Math.cos(th)).addScaledVector(w, Math.sin(th));
-        const n = fugi.n.clone().multiplyScalar(Math.cos(D)).addScaledVector(dir, Math.sin(D)).normalize(), d = [n.x, n.y, n.z];
+        const theta = startAngle + i * 0.0873, direction = east.clone().multiplyScalar(Math.cos(theta)).addScaledVector(north, Math.sin(theta));
+        const n = fugi.n.clone().multiplyScalar(Math.cos(arcDistance)).addScaledVector(direction, Math.sin(arcDistance)).normalize(), d = [n.x, n.y, n.z];
         if (!P.isLand(d) || P.biome(d) === 'ice' || Math.abs(n.y) > 0.72 || !nearLand(d, 0.05)) continue;
-        nug = { n, d, h: P.relHeight(d) }; break search;
+        nug = { n, d, h: P.relHeight(d) };
+        break search;
       }
     }
+    // fallback: the candidate point closest to a gentle 0.17 radians from Mount Fugi
     nug = nug || cand.filter(c => c.b !== 'ice' && angle(c.n, fugi.n) > 0.1).sort((a, b) => Math.abs(angle(a.n, fugi.n) - 0.17) - Math.abs(angle(b.n, fugi.n) - 0.17))[0];
   }
 
   /* cities: farthest-point spread across all land */
-  const taken = [fugi.n, fug2.n, nug.n];
+  const taken = [fugi.n, fug2.n, nug.n];   // spots already used; each new city goes as far from all of these as possible
   const cityCand = cand.filter(c => c.b !== 'ice' && Math.abs(c.d[1]) < 0.72);   // no cities on the ice cap
   const cities = [];
   for (let i = 0; i < CITY_INFO.length; i++) {
-    let best = null, bd = -1;
+    let best = null, bestDistance = -1;
     for (const c of cityCand) {
-      let m = 9; for (const t of taken) m = Math.min(m, angle(c.n, t));
-      if (m > bd) { bd = m; best = c; }
+      let nearestTaken = 9;
+      for (const spot of taken) nearestTaken = Math.min(nearestTaken, angle(c.n, spot));
+      if (nearestTaken > bestDistance) { bestDistance = nearestTaken; best = c; }
     }
     taken.push(best.n);
     cities.push({ name: CITY_INFO[i][0], info: CITY_INFO[i][1], n: best.n, biome: best.b, Ru: 7.4 + ((i * 7) % 5) * 0.5 });
