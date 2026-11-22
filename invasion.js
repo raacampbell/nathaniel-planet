@@ -1,14 +1,24 @@
 /* The Alien Invasion of Nathaniel Planet (space age only).
    A ~3.5 minute show: saucers arrive, laser the towns, barbecue Mount Chicken Nugget, land and eat the nuggets,
    the planet fights back, the aliens flee, victory party, and everything goes back to how it was.
-   The aliens and their ships are drawn in a glossy, realistic style on purpose, so they look wrong in the cartoon world. */
+   The aliens and their ships are drawn in a glossy, realistic style on purpose, so they look wrong in the cartoon world.
+
+   Layout of this file:
+   - injectCSS(): the styles for the button, warning dialog, captions and victory screen.
+   - confirmDialog(): the over-the-top "are you sure?" warning.
+   - start(ctx): runs the whole show. `ctx` is handed over by index.html (the three.js scene, camera, cities,
+     the volcano that is the nugget, helper functions...). Inside it: textures and models, particles, the
+     SCRIPT timeline that spawns things at set times, tick() which moves everything each frame, victory() and end(). */
 (function (root) {
   'use strict';
-  let css = false;
+
+  let cssInjected = false;
+  // Adds the invasion's stylesheet to the page (once).
   function injectCSS() {
-    if (css) return; css = true;
-    const st = document.createElement('style');
-    st.textContent = `
+    if (cssInjected) return;
+    cssInjected = true;
+    const style = document.createElement('style');
+    style.textContent = `
 #alienBtn{position:fixed;left:16px;bottom:16px;z-index:21;width:58px;height:52px;border:0;background:none;padding:0;cursor:pointer;filter:drop-shadow(0 3px 6px #000a)}
 #alienBtn svg{width:100%;height:100%}
 #alienBtn span{position:absolute;left:62px;bottom:14px;white-space:nowrap;font:600 13px var(--font);color:#ffd2d2;text-shadow:0 1px 3px #000}
@@ -56,14 +66,16 @@ body.invading #invAlert{opacity:1}
 .inv-smile{position:absolute;bottom:-60px;font-size:44px;animation:invrise ease-out forwards}
 @keyframes invrise{to{transform:translateY(-118vh) rotate(25deg)}}
 `;
-    document.head.appendChild(st);
+    document.head.appendChild(style);
   }
 
   /* ----------------------------------------------------------------------------------------- confirm dialog */
+  // Shows the full-screen warning. "No" closes it; "Let them come" closes it and calls onGo() to start the show.
   function confirmDialog(onGo) {
     injectCSS();
-    const ov = document.createElement('div'); ov.className = 'inv-ov';
-    ov.innerHTML = `<div class="inv-tape t1"><b>⚠ DANGER ⚠ DANGER ⚠ DANGER ⚠</b></div><div class="inv-tape t3">DO NOT CROSS ✦ DO NOT CROSS ✦ DO NOT CROSS</div><div class="inv-tape t2"><b>⚠ ALIEN HAZARD ⚠ ALIEN HAZARD ⚠</b></div>
+    const overlay = document.createElement('div');
+    overlay.className = 'inv-ov';
+    overlay.innerHTML = `<div class="inv-tape t1"><b>⚠ DANGER ⚠ DANGER ⚠ DANGER ⚠</b></div><div class="inv-tape t3">DO NOT CROSS ✦ DO NOT CROSS ✦ DO NOT CROSS</div><div class="inv-tape t2"><b>⚠ ALIEN HAZARD ⚠ ALIEN HAZARD ⚠</b></div>
       <div class="inv-box"><div class="inv-sirens"><div class="inv-siren"></div><div class="inv-siren"></div></div>
         <h1>⚠ WARNING ⚠</h1><h2>Alien invasion imminent</h2>
         <p>Deep-space radar has detected a <b>HUGE</b> fleet of flying saucers heading straight for Nathaniel Planet.</p>
@@ -71,480 +83,1073 @@ body.invading #invAlert{opacity:1}
         <p>Are you absolutely, positively, completely sure you want to let them in?</p>
         <small>(Side effects may include explosions, fires, screaming, barbecued nuggets and wobbly screens.)</small>
         <div class="inv-btns"><button class="inv-no">No thanks, I like my planet</button><button class="inv-go">☠ LET THEM COME ☠</button></div></div>`;
-    document.body.appendChild(ov);
-    ov.querySelector('.inv-no').onclick = () => ov.remove();
-    ov.querySelector('.inv-go').onclick = () => { ov.remove(); onGo(); };
+    document.body.appendChild(overlay);
+    overlay.querySelector('.inv-no').onclick = () => overlay.remove();
+    overlay.querySelector('.inv-go').onclick = () => { overlay.remove(); onGo(); };
   }
 
   /* ----------------------------------------------------------------------------------------- the show */
+
+  /* Runs the invasion. `ctx` comes from index.html and holds: T (three.js), scene, planetGroup, camera,
+     renderer, canvas, cities, nugget (the volcano with an `api` for barbecue/eat/rain/reset), tickers (a list of
+     per-frame functions we add ours to), toon/withInk/inkMat (cartoon materials), partShader (particle
+     material), placeOnSurface, TOWN_S (town scale), setFocus/releaseFocus (camera helpers) and onEnd.
+     Returns { end, skipTo, advance, saucers, aliens, jets }. The last three and `advance` exist for testing. */
   function start(ctx) {
     injectCSS();
-    const T = ctx.T, PG = ctx.planetGroup, cam = ctx.camera, UP = new T.Vector3(0, 1, 0), U = ctx.TOWN_S;
-    const R = (a, b) => a + Math.random() * (b - a);
-    const objects = [], disposables = [];
-    const add = (o, parent) => { (parent || PG).add(o); objects.push([o, parent || PG]); return o; };
-    document.body.classList.add('invading');
-    const alertDiv = document.createElement('div'); alertDiv.id = 'invAlert'; document.body.appendChild(alertDiv);
-    const cap = document.createElement('div'); cap.id = 'invCap'; document.body.appendChild(cap);
-    let capT = 0;
-    const caption = (txt, good) => { cap.textContent = txt; cap.classList.toggle('good', !!good); cap.classList.add('on'); capT = 6; };
+    const THREE = ctx.T, planetGroup = ctx.planetGroup, camera = ctx.camera;
+    const UP = new THREE.Vector3(0, 1, 0), townScale = ctx.TOWN_S;
+    const randomBetween = (low, high) => low + Math.random() * (high - low);
 
-    const env = null, envLight = new T.Object3D();          // (a reflection map washed everything out; plain lights look better)
+    // Everything we add to the scene is remembered here so end() can take it all away again.
+    const objects = [], disposables = [];
+    const addToScene = (object, parent) => {
+      (parent || planetGroup).add(object);
+      objects.push([object, parent || planetGroup]);
+      return object;
+    };
+    document.body.classList.add('invading');
+    const alertDiv = document.createElement('div');   // the pulsing red border round the screen
+    alertDiv.id = 'invAlert';
+    document.body.appendChild(alertDiv);
+    const captionDiv = document.createElement('div');
+    captionDiv.id = 'invCap';
+    document.body.appendChild(captionDiv);
+    let captionTimeLeft = 0;
+    // Shows a headline at the top of the screen for 6 seconds. `good` makes it green (good news for the planet).
+    const caption = (text, good) => {
+      captionDiv.textContent = text;
+      captionDiv.classList.toggle('good', !!good);
+      captionDiv.classList.add('on');
+      captionTimeLeft = 6;
+    };
+
+    const envMap = null, envLight = new THREE.Object3D();          // (a reflection map washed everything out; plain lights look better)
 
     /* ---------- canvas textures for the alien skin and eye ---------- */
-    const skinTex = (() => {
-      const c = document.createElement('canvas'); c.width = 256; c.height = 128; const x = c.getContext('2d');
-      x.fillStyle = '#4d8f2e'; x.fillRect(0, 0, 256, 128);
-      for (let i = 0; i < 900; i++) { x.fillStyle = `rgba(${R(20, 80) | 0},${R(70, 140) | 0},${R(10, 40) | 0},${R(0.15, 0.45)})`; x.beginPath(); x.arc(R(0, 256), R(0, 128), R(1, 7), 0, 6.3); x.fill(); }
-      for (let i = 0; i < 60; i++) { x.strokeStyle = `rgba(90,30,60,${R(0.15, 0.35)})`; x.lineWidth = R(0.5, 1.5); x.beginPath(); let px = R(0, 256), py = R(0, 128); x.moveTo(px, py); for (let k = 0; k < 6; k++) { px += R(-12, 12); py += R(-8, 8); x.lineTo(px, py); } x.stroke(); }
-      for (let i = 0; i < 120; i++) { x.fillStyle = `rgba(200,240,140,${R(0.2, 0.5)})`; x.beginPath(); x.arc(R(0, 256), R(0, 128), R(0.5, 2), 0, 6.3); x.fill(); }
-      const t = new T.CanvasTexture(c); t.wrapS = t.wrapT = T.RepeatWrapping; return t;
+    // Mottled green skin with veins and freckles, drawn on a canvas.
+    const skinTexture = (() => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256; canvas.height = 128;
+      const ctx2d = canvas.getContext('2d');
+      ctx2d.fillStyle = '#4d8f2e';
+      ctx2d.fillRect(0, 0, 256, 128);
+      for (let i = 0; i < 900; i++) {                                    // darker blotches
+        ctx2d.fillStyle = `rgba(${randomBetween(20, 80) | 0},${randomBetween(70, 140) | 0},${randomBetween(10, 40) | 0},${randomBetween(0.15, 0.45)})`;
+        ctx2d.beginPath();
+        ctx2d.arc(randomBetween(0, 256), randomBetween(0, 128), randomBetween(1, 7), 0, 6.3);
+        ctx2d.fill();
+      }
+      for (let i = 0; i < 60; i++) {                                     // wobbly purple veins
+        ctx2d.strokeStyle = `rgba(90,30,60,${randomBetween(0.15, 0.35)})`;
+        ctx2d.lineWidth = randomBetween(0.5, 1.5);
+        ctx2d.beginPath();
+        let pointX = randomBetween(0, 256), pointY = randomBetween(0, 128);
+        ctx2d.moveTo(pointX, pointY);
+        for (let step = 0; step < 6; step++) {
+          pointX += randomBetween(-12, 12);
+          pointY += randomBetween(-8, 8);
+          ctx2d.lineTo(pointX, pointY);
+        }
+        ctx2d.stroke();
+      }
+      for (let i = 0; i < 120; i++) {                                    // pale freckles
+        ctx2d.fillStyle = `rgba(200,240,140,${randomBetween(0.2, 0.5)})`;
+        ctx2d.beginPath();
+        ctx2d.arc(randomBetween(0, 256), randomBetween(0, 128), randomBetween(0.5, 2), 0, 6.3);
+        ctx2d.fill();
+      }
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+      return texture;
     })();
-    const eyeTex = (() => {
-      const c = document.createElement('canvas'); c.width = c.height = 256; const x = c.getContext('2d');
-      x.fillStyle = '#f3ead8'; x.fillRect(0, 0, 256, 256);
-      for (let i = 0; i < 70; i++) { x.strokeStyle = `rgba(190,30,30,${R(0.3, 0.7)})`; x.lineWidth = R(0.4, 1.6); x.beginPath(); let a = R(0, 6.3), r = 125; x.moveTo(128 + Math.cos(a) * r, 128 + Math.sin(a) * r); for (let k = 0; k < 7; k++) { r -= R(6, 12); a += R(-0.15, 0.15); x.lineTo(128 + Math.cos(a) * r, 128 + Math.sin(a) * r); } x.stroke(); }
-      const ig = x.createRadialGradient(128, 128, 8, 128, 128, 62); ig.addColorStop(0, '#ffef6a'); ig.addColorStop(0.5, '#e38a12'); ig.addColorStop(0.92, '#7a2a05'); ig.addColorStop(1, '#2a0a00');
-      x.fillStyle = ig; x.beginPath(); x.arc(128, 128, 62, 0, 6.3); x.fill();
-      for (let i = 0; i < 90; i++) { const a = i / 90 * 6.283; x.strokeStyle = `rgba(80,30,0,${R(0.2, 0.5)})`; x.lineWidth = 1; x.beginPath(); x.moveTo(128 + Math.cos(a) * 14, 128 + Math.sin(a) * 14); x.lineTo(128 + Math.cos(a) * 60, 128 + Math.sin(a) * 60); x.stroke(); }
-      x.fillStyle = '#050505'; x.beginPath(); x.ellipse(128, 128, 9, 46, 0, 0, 6.3); x.fill();
-      x.fillStyle = 'rgba(255,255,255,0.85)'; x.beginPath(); x.ellipse(104, 104, 10, 7, -0.6, 0, 6.3); x.fill();
-      return new T.CanvasTexture(c);
+
+    // A bloodshot eyeball with a yellow-orange iris and a slit pupil, drawn on a canvas.
+    const eyeTexture = (() => {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 256;
+      const ctx2d = canvas.getContext('2d');
+      ctx2d.fillStyle = '#f3ead8';
+      ctx2d.fillRect(0, 0, 256, 256);
+      for (let i = 0; i < 70; i++) {                                     // red veins running in from the edge
+        ctx2d.strokeStyle = `rgba(190,30,30,${randomBetween(0.3, 0.7)})`;
+        ctx2d.lineWidth = randomBetween(0.4, 1.6);
+        ctx2d.beginPath();
+        let angle = randomBetween(0, 6.3), radius = 125;
+        ctx2d.moveTo(128 + Math.cos(angle) * radius, 128 + Math.sin(angle) * radius);
+        for (let step = 0; step < 7; step++) {
+          radius -= randomBetween(6, 12);
+          angle += randomBetween(-0.15, 0.15);
+          ctx2d.lineTo(128 + Math.cos(angle) * radius, 128 + Math.sin(angle) * radius);
+        }
+        ctx2d.stroke();
+      }
+      const irisGradient = ctx2d.createRadialGradient(128, 128, 8, 128, 128, 62);
+      irisGradient.addColorStop(0, '#ffef6a');
+      irisGradient.addColorStop(0.5, '#e38a12');
+      irisGradient.addColorStop(0.92, '#7a2a05');
+      irisGradient.addColorStop(1, '#2a0a00');
+      ctx2d.fillStyle = irisGradient;
+      ctx2d.beginPath();
+      ctx2d.arc(128, 128, 62, 0, 6.3);
+      ctx2d.fill();
+      for (let i = 0; i < 90; i++) {                                     // fibres radiating through the iris
+        const angle = i / 90 * 6.283;
+        ctx2d.strokeStyle = `rgba(80,30,0,${randomBetween(0.2, 0.5)})`;
+        ctx2d.lineWidth = 1;
+        ctx2d.beginPath();
+        ctx2d.moveTo(128 + Math.cos(angle) * 14, 128 + Math.sin(angle) * 14);
+        ctx2d.lineTo(128 + Math.cos(angle) * 60, 128 + Math.sin(angle) * 60);
+        ctx2d.stroke();
+      }
+      ctx2d.fillStyle = '#050505';                                       // slit pupil
+      ctx2d.beginPath();
+      ctx2d.ellipse(128, 128, 9, 46, 0, 0, 6.3);
+      ctx2d.fill();
+      ctx2d.fillStyle = 'rgba(255,255,255,0.85)';                        // glint
+      ctx2d.beginPath();
+      ctx2d.ellipse(104, 104, 10, 7, -0.6, 0, 6.3);
+      ctx2d.fill();
+      return new THREE.CanvasTexture(canvas);
     })();
-    disposables.push(skinTex, eyeTex);
-    const skinMat = new T.MeshStandardMaterial({ map: skinTex, color: 0xffffff, roughness: 0.32, metalness: 0.05, envMap: env, envMapIntensity: 0.9 });
-    const skinUnder = new T.MeshStandardMaterial({ color: 0xc8d98a, roughness: 0.45, metalness: 0, envMap: env, envMapIntensity: 0.6 });
-    const eyeMat = new T.MeshStandardMaterial({ map: eyeTex, roughness: 0.06, metalness: 0, envMap: env, envMapIntensity: 1.2 });
-    const panelTex = (() => {                                   // riveted hull plates
-      const c = document.createElement('canvas'); c.width = 512; c.height = 256; const x = c.getContext('2d');
-      x.fillStyle = '#9aa1a8'; x.fillRect(0, 0, 512, 256);
-      for (let i = 0; i < 400; i++) { x.fillStyle = `rgba(${R(120, 190) | 0},${R(125, 195) | 0},${R(135, 205) | 0},0.35)`; x.fillRect(R(0, 512), R(0, 256), R(10, 60), R(6, 30)); }
-      x.strokeStyle = 'rgba(30,32,36,0.8)'; x.lineWidth = 2;
-      for (let j = 0; j < 256; j += 32) { x.beginPath(); x.moveTo(0, j); x.lineTo(512, j); x.stroke(); }
-      for (let i = 0; i < 512; i += 32) for (let j = 0; j < 256; j += 32) { x.beginPath(); x.moveTo(i + (j / 32 % 2) * 16, j); x.lineTo(i + (j / 32 % 2) * 16, j + 32); x.stroke(); }
-      x.fillStyle = 'rgba(20,20,24,0.7)'; for (let i = 0; i < 512; i += 8) for (let j = 4; j < 256; j += 32) x.fillRect(i, j, 2, 2);
-      for (let i = 0; i < 40; i++) { x.fillStyle = `rgba(60,40,20,${R(0.1, 0.3)})`; x.beginPath(); x.ellipse(R(0, 512), R(0, 256), R(4, 30), R(2, 10), 0, 0, 6.3); x.fill(); }
-      return new T.CanvasTexture(c);
+    disposables.push(skinTexture, eyeTexture);
+
+    const skinMaterial = new THREE.MeshStandardMaterial({ map: skinTexture, color: 0xffffff, roughness: 0.32, metalness: 0.05, envMap: envMap, envMapIntensity: 0.9 });
+    const skinUnderMaterial = new THREE.MeshStandardMaterial({ color: 0xc8d98a, roughness: 0.45, metalness: 0, envMap: envMap, envMapIntensity: 0.6 });
+    const eyeMaterial = new THREE.MeshStandardMaterial({ map: eyeTexture, roughness: 0.06, metalness: 0, envMap: envMap, envMapIntensity: 1.2 });
+
+    // Riveted grey metal hull plates for the saucers, drawn on a canvas.
+    const hullTexture = (() => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 512; canvas.height = 256;
+      const ctx2d = canvas.getContext('2d');
+      ctx2d.fillStyle = '#9aa1a8';
+      ctx2d.fillRect(0, 0, 512, 256);
+      for (let i = 0; i < 400; i++) {                                    // lighter patches
+        ctx2d.fillStyle = `rgba(${randomBetween(120, 190) | 0},${randomBetween(125, 195) | 0},${randomBetween(135, 205) | 0},0.35)`;
+        ctx2d.fillRect(randomBetween(0, 512), randomBetween(0, 256), randomBetween(10, 60), randomBetween(6, 30));
+      }
+      ctx2d.strokeStyle = 'rgba(30,32,36,0.8)';
+      ctx2d.lineWidth = 2;
+      for (let y = 0; y < 256; y += 32) { ctx2d.beginPath(); ctx2d.moveTo(0, y); ctx2d.lineTo(512, y); ctx2d.stroke(); }   // plate seams: rows...
+      for (let x = 0; x < 512; x += 32) {                                                                                  // ...and staggered columns
+        for (let y = 0; y < 256; y += 32) {
+          ctx2d.beginPath();
+          ctx2d.moveTo(x + (y / 32 % 2) * 16, y);
+          ctx2d.lineTo(x + (y / 32 % 2) * 16, y + 32);
+          ctx2d.stroke();
+        }
+      }
+      ctx2d.fillStyle = 'rgba(20,20,24,0.7)';                            // rivets
+      for (let x = 0; x < 512; x += 8) for (let y = 4; y < 256; y += 32) ctx2d.fillRect(x, y, 2, 2);
+      for (let i = 0; i < 40; i++) {                                     // rust stains
+        ctx2d.fillStyle = `rgba(60,40,20,${randomBetween(0.1, 0.3)})`;
+        ctx2d.beginPath();
+        ctx2d.ellipse(randomBetween(0, 512), randomBetween(0, 256), randomBetween(4, 30), randomBetween(2, 10), 0, 0, 6.3);
+        ctx2d.fill();
+      }
+      return new THREE.CanvasTexture(canvas);
     })();
-    disposables.push(panelTex);
-    const hullMat = new T.MeshStandardMaterial({ color: 0xc4cad2, map: panelTex, metalness: 0.55, roughness: 0.32 });
-    const hullDark = new T.MeshStandardMaterial({ color: 0x3a3f46, metalness: 0.8, roughness: 0.4, envMap: env });
-    const domeMat = new T.MeshStandardMaterial({ color: 0x7dffcf, emissive: 0x0b5a3c, metalness: 0.1, roughness: 0.04, transparent: true, opacity: 0.62, envMap: env, envMapIntensity: 1.4 });
-    disposables.push(skinMat, skinUnder, eyeMat, hullMat, hullDark, domeMat);
+    disposables.push(hullTexture);
+    const hullMaterial = new THREE.MeshStandardMaterial({ color: 0xc4cad2, map: hullTexture, metalness: 0.55, roughness: 0.32 });
+    const hullDarkMaterial = new THREE.MeshStandardMaterial({ color: 0x3a3f46, metalness: 0.8, roughness: 0.4, envMap: envMap });
+    const domeMaterial = new THREE.MeshStandardMaterial({ color: 0x7dffcf, emissive: 0x0b5a3c, metalness: 0.1, roughness: 0.04, transparent: true, opacity: 0.62, envMap: envMap, envMapIntensity: 1.4 });
+    disposables.push(skinMaterial, skinUnderMaterial, eyeMaterial, hullMaterial, hullDarkMaterial, domeMaterial);
 
     /* ---------- the flying saucer ---------- */
-    const SAUCER = 0.05;                                                    // diameter in world units
-    const saucerGeo = (() => {
-      const pr = [[0, -0.12], [0.18, -0.13], [0.36, -0.11], [0.47, -0.06], [0.5, 0], [0.46, 0.04], [0.33, 0.08], [0.2, 0.11], [0, 0.12]].map(p => new T.Vector2(p[0], p[1]));
-      return new T.LatheGeometry(new T.SplineCurve(pr).getPoints(40).map(p => new T.Vector2(Math.max(0, p.x), p.y)), 64);
+    const SAUCER_SIZE = 0.05;                                                    // diameter in world units
+    // The saucer body: a profile curve spun round into a disc shape.
+    const saucerGeometry = (() => {
+      const profile = [[0, -0.12], [0.18, -0.13], [0.36, -0.11], [0.47, -0.06], [0.5, 0], [0.46, 0.04], [0.33, 0.08], [0.2, 0.11], [0, 0.12]]
+        .map(point => new THREE.Vector2(point[0], point[1]));
+      return new THREE.LatheGeometry(new THREE.SplineCurve(profile).getPoints(40).map(point => new THREE.Vector2(Math.max(0, point.x), point.y)), 64);
     })();
-    disposables.push(saucerGeo);
-    const lightGeo = new T.SphereGeometry(0.022, 10, 8); disposables.push(lightGeo);
+    disposables.push(saucerGeometry);
+    const rimLightGeometry = new THREE.SphereGeometry(0.022, 10, 8);
+    disposables.push(rimLightGeometry);
+
+    /* Builds one saucer: hull, rim ring, glass dome with a little pilot, 16 blinking rim lights, an underside
+       glow and a tractor beam (hidden until needed). Returns { group, body, lights, beam, under }. */
     function makeSaucer() {
-      const g = new T.Group(), body = new T.Group(); g.add(body);
-      body.add(new T.Mesh(saucerGeo, hullMat));
-      body.add(new T.Mesh(new T.TorusGeometry(0.47, 0.025, 10, 64).rotateX(Math.PI / 2), hullDark));
-      const dome = new T.Mesh(new T.SphereGeometry(0.19, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2).translate(0, 0.1, 0), domeMat); body.add(dome);
-      const pilot = new T.Mesh(new T.SphereGeometry(0.07, 16, 12).translate(0, 0.15, 0), skinMat); body.add(pilot);
+      const group = new THREE.Group(), body = new THREE.Group();
+      group.add(body);
+      body.add(new THREE.Mesh(saucerGeometry, hullMaterial));
+      body.add(new THREE.Mesh(new THREE.TorusGeometry(0.47, 0.025, 10, 64).rotateX(Math.PI / 2), hullDarkMaterial));
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(0.19, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2).translate(0, 0.1, 0), domeMaterial);
+      body.add(dome);
+      const pilot = new THREE.Mesh(new THREE.SphereGeometry(0.07, 16, 12).translate(0, 0.15, 0), skinMaterial);
+      body.add(pilot);
       const lights = [];
-      for (let i = 0; i < 16; i++) { const a = i / 16 * 6.283, m = new T.Mesh(lightGeo, new T.MeshBasicMaterial({ color: i % 2 ? 0x6bff8a : 0xff4a4a })); m.position.set(Math.cos(a) * 0.475, 0.0, Math.sin(a) * 0.475); body.add(m); lights.push(m); }
-      const under = new T.Mesh(new T.CircleGeometry(0.16, 32).rotateX(Math.PI / 2).translate(0, -0.125, 0), new T.MeshBasicMaterial({ color: 0x8dffb0 })); body.add(under);
-      const beam = new T.Mesh(new T.ConeGeometry(0.22, 1, 32, 1, true).translate(0, -0.5, 0), new T.MeshBasicMaterial({ color: 0x8dffb0, transparent: true, opacity: 0.22, blending: T.AdditiveBlending, depthWrite: false, side: T.DoubleSide }));
-      beam.position.y = -0.12; beam.visible = false; g.add(beam);
-      g.scale.setScalar(SAUCER);
-      return { g, body, lights, beam, under };
+      for (let i = 0; i < 16; i++) {
+        const angle = i / 16 * 6.283;
+        const light = new THREE.Mesh(rimLightGeometry, new THREE.MeshBasicMaterial({ color: i % 2 ? 0x6bff8a : 0xff4a4a }));
+        light.position.set(Math.cos(angle) * 0.475, 0.0, Math.sin(angle) * 0.475);
+        body.add(light);
+        lights.push(light);
+      }
+      const under = new THREE.Mesh(new THREE.CircleGeometry(0.16, 32).rotateX(Math.PI / 2).translate(0, -0.125, 0), new THREE.MeshBasicMaterial({ color: 0x8dffb0 }));
+      body.add(under);
+      const beam = new THREE.Mesh(
+        new THREE.ConeGeometry(0.22, 1, 32, 1, true).translate(0, -0.5, 0),
+        new THREE.MeshBasicMaterial({ color: 0x8dffb0, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+      beam.position.y = -0.12;
+      beam.visible = false;
+      group.add(beam);
+      group.scale.setScalar(SAUCER_SIZE);
+      return { group, body, lights, beam, under };
     }
 
     /* ---------- the aliens: glossy, lumpy, too many tentacles, one enormous eye ---------- */
-    const bodyGeo = (() => {
-      const g = new T.SphereGeometry(0.5, 48, 32), p = g.attributes.position;
-      for (let i = 0; i < p.count; i++) { const x = p.getX(i), y = p.getY(i), z = p.getZ(i), k = 1 + 0.07 * Math.sin(x * 17 + y * 5) * Math.cos(z * 13 - y * 9) + 0.04 * Math.sin(y * 31 + x * 7); p.setXYZ(i, x * k * 0.9, y * k * 1.15 + 0.05, z * k * 0.85); }
-      g.computeVertexNormals(); return g;
-    })();
-    const eyeGeo = new T.SphereGeometry(0.3, 40, 28), lidGeo = new T.SphereGeometry(0.315, 32, 16, 0, Math.PI * 2, 0, Math.PI * 0.42);
-    const segGeo = [], SEGN = 9;
-    for (let i = 0; i < SEGN; i++) { const r0 = 0.075 * (1 - i / SEGN) + 0.012, r1 = 0.075 * (1 - (i + 1) / SEGN) + 0.012; segGeo.push(new T.CylinderGeometry(r1, r0, 0.11, 14, 1).translate(0, -0.055, 0)); }
-    const tipGeo = new T.SphereGeometry(0.014, 10, 8), suckGeo = new T.SphereGeometry(0.018, 10, 8);
-    disposables.push(bodyGeo, eyeGeo, lidGeo, tipGeo, suckGeo, ...segGeo);
-    function makeAlien() {
-      const g = new T.Group(), b = new T.Group(); g.add(b);
-      const body = new T.Mesh(bodyGeo, skinMat); body.position.y = 0.62; b.add(body);
-      const belly = new T.Mesh(new T.SphereGeometry(0.33, 24, 16).scale(1, 1.2, 0.6).translate(0, 0.5, 0.2), skinUnder); b.add(belly); disposables.push(belly.geometry);
-      const eye = new T.Mesh(eyeGeo, eyeMat); eye.position.set(0, 0.86, 0.22); b.add(eye);
-      const lid = new T.Mesh(lidGeo, skinMat); lid.position.copy(eye.position); lid.rotation.x = -0.25; b.add(lid);
-      const mouth = new T.Mesh(new T.TorusGeometry(0.08, 0.018, 8, 20, Math.PI), new T.MeshStandardMaterial({ color: 0x3a0a1a, roughness: 0.3, envMap: env })); mouth.position.set(0, 0.5, 0.4); mouth.rotation.z = Math.PI; b.add(mouth); disposables.push(mouth.geometry, mouth.material);
-      const tent = [];
-      for (let k = 0; k < 7; k++) {
-        const a = k / 7 * 6.283, root = new T.Group(); root.position.set(Math.sin(a) * 0.28, 0.4, Math.cos(a) * 0.26); root.rotation.set(0.9, a, 0, 'YXZ');
-        b.add(root);
-        let parent = root; const segs = [];
-        for (let i = 0; i < SEGN; i++) {
-          const s = new T.Group(); s.position.y = i ? -0.105 : 0; parent.add(s);
-          s.add(new T.Mesh(segGeo[i], skinMat));
-          if (i % 2 === 1) { const su = new T.Mesh(suckGeo, skinUnder); su.position.set(0, -0.05, 0.05 * (1 - i / SEGN) + 0.008); su.scale.setScalar(1 - i / SEGN * 0.6); s.add(su); }
-          segs.push(s); parent = s;
-        }
-        const tip = new T.Mesh(tipGeo, skinMat); tip.position.y = -0.11; parent.add(tip);
-        tent.push({ segs, ph: Math.random() * 6, a });
+    // A lumpy egg-shaped body: a sphere pushed about by sine waves.
+    const alienBodyGeometry = (() => {
+      const geometry = new THREE.SphereGeometry(0.5, 48, 32), positions = geometry.attributes.position;
+      for (let i = 0; i < positions.count; i++) {
+        const x = positions.getX(i), y = positions.getY(i), z = positions.getZ(i);
+        const lump = 1 + 0.07 * Math.sin(x * 17 + y * 5) * Math.cos(z * 13 - y * 9) + 0.04 * Math.sin(y * 31 + x * 7);
+        positions.setXYZ(i, x * lump * 0.9, y * lump * 1.15 + 0.05, z * lump * 0.85);
       }
-      g.scale.setScalar(U * 1.7);
-      return { g, b, eye, lid, tent, blink: 0 };
+      geometry.computeVertexNormals();
+      return geometry;
+    })();
+    const eyeGeometry = new THREE.SphereGeometry(0.3, 40, 28), lidGeometry = new THREE.SphereGeometry(0.315, 32, 16, 0, Math.PI * 2, 0, Math.PI * 0.42);
+    // Each tentacle is a chain of tapering cylinder segments.
+    const segmentGeometries = [], SEGMENT_COUNT = 9;
+    for (let i = 0; i < SEGMENT_COUNT; i++) {
+      const radiusTop = 0.075 * (1 - i / SEGMENT_COUNT) + 0.012, radiusBottom = 0.075 * (1 - (i + 1) / SEGMENT_COUNT) + 0.012;
+      segmentGeometries.push(new THREE.CylinderGeometry(radiusBottom, radiusTop, 0.11, 14, 1).translate(0, -0.055, 0));
     }
-    function wiggle(A, t, speed, amp) {
-      for (const tt of A.tent) tt.segs.forEach((s, i) => { s.rotation.x = Math.sin(t * speed + tt.ph + i * 0.7) * amp * (0.4 + i * 0.12); s.rotation.z = Math.cos(t * speed * 0.8 + tt.ph + i * 0.9) * amp * 0.5; });
-      A.blink -= 0.016; if (A.blink < -3 - Math.random() * 3) A.blink = 0.15;
-      A.lid.rotation.x = A.blink > 0 ? 0.6 : -0.25;
+    const tipGeometry = new THREE.SphereGeometry(0.014, 10, 8), suckerGeometry = new THREE.SphereGeometry(0.018, 10, 8);
+    disposables.push(alienBodyGeometry, eyeGeometry, lidGeometry, tipGeometry, suckerGeometry, ...segmentGeometries);
+
+    /* Builds one alien: lumpy body, belly, giant eye with an eyelid, mouth and seven wiggly tentacles.
+       Returns { group, bodyGroup, eye, lid, tentacles, blink }. */
+    function makeAlien() {
+      const group = new THREE.Group(), bodyGroup = new THREE.Group();
+      group.add(bodyGroup);
+      const body = new THREE.Mesh(alienBodyGeometry, skinMaterial);
+      body.position.y = 0.62;
+      bodyGroup.add(body);
+      const belly = new THREE.Mesh(new THREE.SphereGeometry(0.33, 24, 16).scale(1, 1.2, 0.6).translate(0, 0.5, 0.2), skinUnderMaterial);
+      bodyGroup.add(belly);
+      disposables.push(belly.geometry);
+      const eye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+      eye.position.set(0, 0.86, 0.22);
+      bodyGroup.add(eye);
+      const lid = new THREE.Mesh(lidGeometry, skinMaterial);
+      lid.position.copy(eye.position);
+      lid.rotation.x = -0.25;
+      bodyGroup.add(lid);
+      const mouth = new THREE.Mesh(new THREE.TorusGeometry(0.08, 0.018, 8, 20, Math.PI), new THREE.MeshStandardMaterial({ color: 0x3a0a1a, roughness: 0.3, envMap: envMap }));
+      mouth.position.set(0, 0.5, 0.4);
+      mouth.rotation.z = Math.PI;
+      bodyGroup.add(mouth);
+      disposables.push(mouth.geometry, mouth.material);
+      const tentacles = [];
+      for (let k = 0; k < 7; k++) {
+        const angle = k / 7 * 6.283, tentacleRoot = new THREE.Group();
+        tentacleRoot.position.set(Math.sin(angle) * 0.28, 0.4, Math.cos(angle) * 0.26);
+        tentacleRoot.rotation.set(0.9, angle, 0, 'YXZ');
+        bodyGroup.add(tentacleRoot);
+        let parent = tentacleRoot;
+        const segments = [];
+        for (let i = 0; i < SEGMENT_COUNT; i++) {
+          const segment = new THREE.Group();
+          segment.position.y = i ? -0.105 : 0;
+          parent.add(segment);
+          segment.add(new THREE.Mesh(segmentGeometries[i], skinMaterial));
+          if (i % 2 === 1) {                                              // a sucker on every other segment
+            const sucker = new THREE.Mesh(suckerGeometry, skinUnderMaterial);
+            sucker.position.set(0, -0.05, 0.05 * (1 - i / SEGMENT_COUNT) + 0.008);
+            sucker.scale.setScalar(1 - i / SEGMENT_COUNT * 0.6);
+            segment.add(sucker);
+          }
+          segments.push(segment);
+          parent = segment;
+        }
+        const tip = new THREE.Mesh(tipGeometry, skinMaterial);
+        tip.position.y = -0.11;
+        parent.add(tip);
+        tentacles.push({ segs: segments, ph: Math.random() * 6, a: angle });   // segs: the segment groups, ph: wiggle phase, a: angle round the body
+      }
+      group.scale.setScalar(townScale * 1.7);
+      return { group, bodyGroup, eye, lid, tentacles, blink: 0 };
+    }
+
+    // Animates an alien's tentacles (a travelling wave of wiggles) and makes it blink now and then.
+    function wiggle(alien, time, speed, amplitude) {
+      for (const tentacle of alien.tentacles) {
+        tentacle.segs.forEach((segment, i) => {
+          segment.rotation.x = Math.sin(time * speed + tentacle.ph + i * 0.7) * amplitude * (0.4 + i * 0.12);
+          segment.rotation.z = Math.cos(time * speed * 0.8 + tentacle.ph + i * 0.9) * amplitude * 0.5;
+        });
+      }
+      alien.blink -= 0.016;
+      if (alien.blink < -3 - Math.random() * 3) alien.blink = 0.15;
+      alien.lid.rotation.x = alien.blink > 0 ? 0.6 : -0.25;
     }
 
     /* ---------- defenders: cartoon jets and turrets (the planet's own style) ---------- */
-    function makeJet(col) {
-      const g = new T.Group(), s = 1;
-      const f = ctx.withInk(new T.Mesh(new T.CylinderGeometry(0.06, 0.1, 1, 10).rotateZ(-Math.PI / 2), ctx.toon(col)), 1.12); g.add(f);
-      g.add(ctx.withInk(new T.Mesh(new T.ConeGeometry(0.06, 0.3, 10).rotateZ(-Math.PI / 2).translate(0.64, 0, 0), ctx.toon(col)), 1.12));
-      g.add(ctx.withInk(new T.Mesh(new T.BoxGeometry(0.34, 0.03, 1.1).translate(-0.05, 0, 0), ctx.toon(0xffffff)), 1.1));
-      g.add(ctx.withInk(new T.Mesh(new T.BoxGeometry(0.2, 0.3, 0.03).translate(-0.42, 0.14, 0), ctx.toon(col)), 1.1));
-      g.add(new T.Mesh(new T.SphereGeometry(0.06, 10, 8).scale(1.8, 0.9, 1).translate(0.3, 0.07, 0), ctx.toon(0x6ad0ff)));
-      g.scale.setScalar(0.012 * s);
-      return g;
+    // A small cartoon jet fighter in colour `color`, pointing along +x.
+    function makeJet(color) {
+      const group = new THREE.Group();
+      const fuselage = ctx.withInk(new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.1, 1, 10).rotateZ(-Math.PI / 2), ctx.toon(color)), 1.12);
+      group.add(fuselage);
+      group.add(ctx.withInk(new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.3, 10).rotateZ(-Math.PI / 2).translate(0.64, 0, 0), ctx.toon(color)), 1.12));   // nose
+      group.add(ctx.withInk(new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.03, 1.1).translate(-0.05, 0, 0), ctx.toon(0xffffff)), 1.1));                   // wings
+      group.add(ctx.withInk(new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.3, 0.03).translate(-0.42, 0.14, 0), ctx.toon(color)), 1.1));                    // tail fin
+      group.add(new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 8).scale(1.8, 0.9, 1).translate(0.3, 0.07, 0), ctx.toon(0x6ad0ff)));                  // cockpit
+      group.scale.setScalar(0.012);
+      return group;
     }
+    // An anti-saucer gun turret: a round base with a twin-barrelled gun that can swivel. Returns { group, gun }.
     function makeTurret() {
-      const g = new T.Group(), gun = new T.Group();
-      g.add(ctx.withInk(new T.Mesh(new T.CylinderGeometry(0.5, 0.6, 0.4, 14).translate(0, 0.2, 0), ctx.toon(0x6b7a4a)), 1.08));
-      gun.add(ctx.withInk(new T.Mesh(new T.SphereGeometry(0.4, 14, 10), ctx.toon(0x7d8c56)), 1.08));
-      for (const z of [-0.12, 0.12]) gun.add(ctx.withInk(new T.Mesh(new T.CylinderGeometry(0.06, 0.07, 1.0, 8).translate(0, 0.5, z), ctx.toon(0x3a3f46)), 1.1));
-      gun.position.y = 0.45; g.add(gun);
-      g.scale.setScalar(U * 1.3);
-      return { g, gun };
+      const group = new THREE.Group(), gun = new THREE.Group();
+      group.add(ctx.withInk(new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.6, 0.4, 14).translate(0, 0.2, 0), ctx.toon(0x6b7a4a)), 1.08));
+      gun.add(ctx.withInk(new THREE.Mesh(new THREE.SphereGeometry(0.4, 14, 10), ctx.toon(0x7d8c56)), 1.08));
+      for (const barrelZ of [-0.12, 0.12]) {
+        gun.add(ctx.withInk(new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 1.0, 8).translate(0, 0.5, barrelZ), ctx.toon(0x3a3f46)), 1.1));
+      }
+      gun.position.y = 0.45;
+      group.add(gun);
+      group.scale.setScalar(townScale * 1.3);
+      return { group, gun };
     }
 
     /* ---------- particles: explosions, fire, smoke ---------- */
-    function particles(N, blend) {
-      const A = { pos: new Float32Array(N * 3), col: new Float32Array(N * 3), size: new Float32Array(N), alpha: new Float32Array(N) };
-      const geo = new T.BufferGeometry(); geo.setAttribute('position', new T.BufferAttribute(A.pos, 3)); geo.setAttribute('color', new T.BufferAttribute(A.col, 3)); geo.setAttribute('size', new T.BufferAttribute(A.size, 1)); geo.setAttribute('alpha', new T.BufferAttribute(A.alpha, 1));
-      const mat = ctx.partShader(blend), pts = new T.Points(geo, mat); pts.frustumCulled = false; add(pts); disposables.push(geo, mat);
-      const vel = new Float32Array(N * 3), life = new Float32Array(N), max = new Float32Array(N), s0 = new Float32Array(N), s1 = new Float32Array(N), c0 = new Float32Array(N * 3), c1 = new Float32Array(N * 3), op = new Float32Array(N);
-      let next = 0;
+    /* A pool of `count` point sprites that fly about and fade. Returns { emit, step }.
+       emit(position, velocity, lifetime, startSize, endSize, startColor, endColor, opacity) starts one particle
+       (reusing the oldest slot); step(dt, drag, gravity) moves them all. `blending` is the three.js blending mode. */
+    function particles(count, blending) {
+      const attributes = { pos: new Float32Array(count * 3), col: new Float32Array(count * 3), size: new Float32Array(count), alpha: new Float32Array(count) };
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(attributes.pos, 3));
+      geometry.setAttribute('color', new THREE.BufferAttribute(attributes.col, 3));
+      geometry.setAttribute('size', new THREE.BufferAttribute(attributes.size, 1));
+      geometry.setAttribute('alpha', new THREE.BufferAttribute(attributes.alpha, 1));
+      const material = ctx.partShader(blending), points = new THREE.Points(geometry, material);
+      points.frustumCulled = false;
+      addToScene(points);
+      disposables.push(geometry, material);
+      // Per-particle state that does not go to the GPU.
+      const velocity = new Float32Array(count * 3), lifeLeft = new Float32Array(count), lifeTotal = new Float32Array(count);
+      const sizeStart = new Float32Array(count), sizeEnd = new Float32Array(count);
+      const colorStart = new Float32Array(count * 3), colorEnd = new Float32Array(count * 3), opacity = new Float32Array(count);
+      let nextSlot = 0;
       return {
-        emit(p, v, lf, a, b, ca, cb, o) { const i = next; next = (next + 1) % N; A.pos[i * 3] = p.x; A.pos[i * 3 + 1] = p.y; A.pos[i * 3 + 2] = p.z; vel[i * 3] = v.x; vel[i * 3 + 1] = v.y; vel[i * 3 + 2] = v.z; life[i] = max[i] = lf; s0[i] = a; s1[i] = b; c0.set(ca, i * 3); c1.set(cb || ca, i * 3); op[i] = o || 1; },
-        step(dt, drag, grav) {
-          mat.uniforms.uScale.value = innerHeight * 0.5 * ctx.renderer.getPixelRatio() / Math.tan(cam.fov * Math.PI / 360) / 2.3;
-          for (let i = 0; i < N; i++) {
-            if (life[i] <= 0) { A.alpha[i] = 0; continue; }
-            life[i] -= dt; const k = Math.max(0, life[i] / max[i]), u = 1 - k, j = i * 3;
-            if (grav) { const x = A.pos[j], y = A.pos[j + 1], z = A.pos[j + 2], l = Math.hypot(x, y, z) || 1; vel[j] -= x / l * grav * dt; vel[j + 1] -= y / l * grav * dt; vel[j + 2] -= z / l * grav * dt; }
-            for (let a2 = 0; a2 < 3; a2++) { vel[j + a2] *= 1 - drag * dt; A.pos[j + a2] += vel[j + a2] * dt; A.col[j + a2] = c0[j + a2] + (c1[j + a2] - c0[j + a2]) * u; }
-            A.size[i] = s0[i] + (s1[i] - s0[i]) * u; A.alpha[i] = Math.min(1, k * 2.5) * op[i];
+        emit(position, vel, lifetime, startSize, endSize, startColor, endColor, opacityScale) {
+          const i = nextSlot;
+          nextSlot = (nextSlot + 1) % count;
+          attributes.pos[i * 3] = position.x; attributes.pos[i * 3 + 1] = position.y; attributes.pos[i * 3 + 2] = position.z;
+          velocity[i * 3] = vel.x; velocity[i * 3 + 1] = vel.y; velocity[i * 3 + 2] = vel.z;
+          lifeLeft[i] = lifeTotal[i] = lifetime;
+          sizeStart[i] = startSize; sizeEnd[i] = endSize;
+          colorStart.set(startColor, i * 3);
+          colorEnd.set(endColor || startColor, i * 3);
+          opacity[i] = opacityScale || 1;
+        },
+        step(dt, drag, gravity) {
+          material.uniforms.uScale.value = innerHeight * 0.5 * ctx.renderer.getPixelRatio() / Math.tan(camera.fov * Math.PI / 360) / 2.3;
+          for (let i = 0; i < count; i++) {
+            if (lifeLeft[i] <= 0) { attributes.alpha[i] = 0; continue; }
+            lifeLeft[i] -= dt;
+            const remaining = Math.max(0, lifeLeft[i] / lifeTotal[i]), elapsed = 1 - remaining, j = i * 3;
+            if (gravity) {                                                  // gravity pulls toward the planet's centre
+              const x = attributes.pos[j], y = attributes.pos[j + 1], z = attributes.pos[j + 2], distance = Math.hypot(x, y, z) || 1;
+              velocity[j] -= x / distance * gravity * dt;
+              velocity[j + 1] -= y / distance * gravity * dt;
+              velocity[j + 2] -= z / distance * gravity * dt;
+            }
+            for (let axis = 0; axis < 3; axis++) {
+              velocity[j + axis] *= 1 - drag * dt;
+              attributes.pos[j + axis] += velocity[j + axis] * dt;
+              attributes.col[j + axis] = colorStart[j + axis] + (colorEnd[j + axis] - colorStart[j + axis]) * elapsed;
+            }
+            attributes.size[i] = sizeStart[i] + (sizeEnd[i] - sizeStart[i]) * elapsed;
+            attributes.alpha[i] = Math.min(1, remaining * 2.5) * opacity[i];
           }
-          geo.attributes.position.needsUpdate = geo.attributes.color.needsUpdate = geo.attributes.size.needsUpdate = geo.attributes.alpha.needsUpdate = true;
+          geometry.attributes.position.needsUpdate = geometry.attributes.color.needsUpdate = geometry.attributes.size.needsUpdate = geometry.attributes.alpha.needsUpdate = true;
         },
       };
     }
-    const fireP = particles(2600, T.AdditiveBlending), smokeP = particles(1800, T.NormalBlending), sparkP = particles(900, T.AdditiveBlending);
-    const flashTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d'); const g = x.createRadialGradient(32, 32, 0, 32, 32, 32); g.addColorStop(0, 'rgba(255,255,230,1)'); g.addColorStop(0.3, 'rgba(255,200,80,0.8)'); g.addColorStop(1, 'rgba(255,80,0,0)'); x.fillStyle = g; x.fillRect(0, 0, 64, 64); return new T.CanvasTexture(c); })();
-    disposables.push(flashTex);
+    const fireParticles = particles(2600, THREE.AdditiveBlending);
+    const smokeParticles = particles(1800, THREE.NormalBlending);
+    const sparkParticles = particles(900, THREE.AdditiveBlending);
+
+    // A soft round glow, used for the bright flash of an explosion.
+    const flashTexture = (() => {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 64;
+      const ctx2d = canvas.getContext('2d');
+      const gradient = ctx2d.createRadialGradient(32, 32, 0, 32, 32, 32);
+      gradient.addColorStop(0, 'rgba(255,255,230,1)');
+      gradient.addColorStop(0.3, 'rgba(255,200,80,0.8)');
+      gradient.addColorStop(1, 'rgba(255,80,0,0)');
+      ctx2d.fillStyle = gradient;
+      ctx2d.fillRect(0, 0, 64, 64);
+      return new THREE.CanvasTexture(canvas);
+    })();
+    disposables.push(flashTexture);
+    // A pool of 16 flash sprites, reused in turn. Each: { sprite, age, duration, size }.
     const flashes = [];
-    for (let i = 0; i < 16; i++) { const sp = new T.Sprite(new T.SpriteMaterial({ map: flashTex, blending: T.AdditiveBlending, transparent: true, depthWrite: false })); sp.visible = false; add(sp); flashes.push({ sp, t: 0, d: 1, s: 1 }); disposables.push(sp.material); }
-    let flashI = 0;
-    const _v = new T.Vector3(), _w = new T.Vector3(), _q = new T.Quaternion();
-    const rv = s => _w.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(s);
+    for (let i = 0; i < 16; i++) {
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTexture, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false }));
+      sprite.visible = false;
+      addToScene(sprite);
+      flashes.push({ sprite, age: 0, duration: 1, size: 1 });
+      disposables.push(sprite.material);
+    }
+    let nextFlash = 0;
+
+    // Scratch objects reused every frame to avoid creating garbage.
+    const tmpVec = new THREE.Vector3(), tmpRandom = new THREE.Vector3(), tmpQuat = new THREE.Quaternion();
+    // A random vector with each component between -scale/2 and +scale/2 (shared scratch object: use it straight away).
+    const randomVector = scale => tmpRandom.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(scale);
 
     /* ---------- action log: where the excitement is (for the automatic camera and screen shake) ---------- */
-    const events = [];
-    let shake = 0, invT = 0;
-    const note = (p, w) => { events.push({ p: p.clone().normalize(), w, t: invT }); if (events.length > 200) events.shift(); };
-    function explode(p, size, big) {
-      const n = p.clone().normalize();
-      for (let i = 0; i < (big ? 70 : 30); i++) fireP.emit(p, _v.copy(rv(1)).normalize().multiplyScalar(R(0.01, 0.05) * size).addScaledVector(n, 0.015 * size), R(0.4, 0.9), 0.006 * size, 0.02 * size, [1, 0.95, 0.6], [0.8, 0.15, 0.02]);
-      for (let i = 0; i < (big ? 40 : 14); i++) smokeP.emit(p, _v.copy(rv(0.02 * size)).addScaledVector(n, R(0.01, 0.025) * size), R(1.5, 3), 0.01 * size, 0.045 * size, [0.35, 0.32, 0.3], [0.6, 0.58, 0.56], 0.8);
-      for (let i = 0; i < (big ? 50 : 18); i++) sparkP.emit(p, _v.copy(rv(1)).normalize().multiplyScalar(R(0.04, 0.12) * size).addScaledVector(n, 0.05 * size), R(0.5, 1.2), 0.003 * size, 0.001, [1, 0.9, 0.4], [1, 0.3, 0]);
-      const F = flashes[flashI++ % flashes.length]; F.sp.position.copy(p); F.t = 0; F.d = big ? 0.7 : 0.4; F.s = (big ? 0.12 : 0.05) * size; F.sp.visible = true;
-      note(p, big ? 6 : 2);
-      const vd = cam.position.clone().normalize(); if (n.dot(vd) > Math.cos(0.45)) shake = Math.min(1.4, shake + (big ? 0.9 : 0.35) * size * Math.max(0.3, 1.8 - (cam.position.length() - 1)));
+    const events = [];                  // recent happenings: { position (unit vector), weight, time }
+    let shake = 0, showTime = 0;        // screen shake strength; seconds since the invasion began
+    // Records that something exciting happened at position p; the automatic camera looks for clusters of these.
+    const noteEvent = (position, weight) => {
+      events.push({ p: position.clone().normalize(), w: weight, t: showTime });
+      if (events.length > 200) events.shift();
+    };
+    // An explosion at `position`: fire, smoke and sparks, a flash, and (if we're looking) screen shake.
+    function explode(position, size, big) {
+      const outward = position.clone().normalize();
+      for (let i = 0; i < (big ? 70 : 30); i++) {
+        fireParticles.emit(position, tmpVec.copy(randomVector(1)).normalize().multiplyScalar(randomBetween(0.01, 0.05) * size).addScaledVector(outward, 0.015 * size), randomBetween(0.4, 0.9), 0.006 * size, 0.02 * size, [1, 0.95, 0.6], [0.8, 0.15, 0.02]);
+      }
+      for (let i = 0; i < (big ? 40 : 14); i++) {
+        smokeParticles.emit(position, tmpVec.copy(randomVector(0.02 * size)).addScaledVector(outward, randomBetween(0.01, 0.025) * size), randomBetween(1.5, 3), 0.01 * size, 0.045 * size, [0.35, 0.32, 0.3], [0.6, 0.58, 0.56], 0.8);
+      }
+      for (let i = 0; i < (big ? 50 : 18); i++) {
+        sparkParticles.emit(position, tmpVec.copy(randomVector(1)).normalize().multiplyScalar(randomBetween(0.04, 0.12) * size).addScaledVector(outward, 0.05 * size), randomBetween(0.5, 1.2), 0.003 * size, 0.001, [1, 0.9, 0.4], [1, 0.3, 0]);
+      }
+      const flash = flashes[nextFlash++ % flashes.length];
+      flash.sprite.position.copy(position);
+      flash.age = 0;
+      flash.duration = big ? 0.7 : 0.4;
+      flash.size = (big ? 0.12 : 0.05) * size;
+      flash.sprite.visible = true;
+      noteEvent(position, big ? 6 : 2);
+      const viewDirection = camera.position.clone().normalize();
+      if (outward.dot(viewDirection) > Math.cos(0.45)) {                // only shake if the explosion is on the side we are looking at
+        shake = Math.min(1.4, shake + (big ? 0.9 : 0.35) * size * Math.max(0.3, 1.8 - (camera.position.length() - 1)));
+      }
     }
-    const fires = [];
-    function addFire(p, life, k) { if (fires.length > 70) fires.shift(); fires.push({ p: p.clone(), n: p.clone().normalize(), life, k: k || 1, acc: 0 }); }
+
+    const fires = [];     // burning spots: { p: position, n: up direction, life: seconds left, k: strength, acc: spark accumulator }
+    function addFire(position, life, strength) {
+      if (fires.length > 70) fires.shift();
+      fires.push({ p: position.clone(), n: position.clone().normalize(), life, k: strength || 1, acc: 0 });
+    }
 
     /* ---------- lasers and tracers ---------- */
-    const beamGeo = new T.CylinderGeometry(1, 1, 1, 8, 1, true).translate(0, 0.5, 0); disposables.push(beamGeo);
-    const beams = [];
-    function beam(a, b, color, w, life) {
-      let B = beams.find(x => x.t <= 0);
-      if (!B) { if (beams.length > 60) return; const core = new T.Mesh(beamGeo, new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, blending: T.AdditiveBlending, depthWrite: false })), glow = new T.Mesh(beamGeo, new T.MeshBasicMaterial({ color, transparent: true, opacity: 0.45, blending: T.AdditiveBlending, depthWrite: false })); add(core); add(glow); B = { core, glow, t: 0 }; beams.push(B); disposables.push(core.material, glow.material); }
-      _v.copy(b).sub(a); const L = _v.length(); _q.setFromUnitVectors(UP, _v.normalize());
-      for (const [m, s] of [[B.core, w * 0.35], [B.glow, w]]) { m.position.copy(a); m.quaternion.copy(_q); m.scale.set(s, L, s); m.visible = true; }
-      B.glow.material.color.set(color); B.t = life; B.life = life;
+    const beamGeometry = new THREE.CylinderGeometry(1, 1, 1, 8, 1, true).translate(0, 0.5, 0);
+    disposables.push(beamGeometry);
+    const beams = [];     // laser beams: { core, glow, t: seconds left, life }
+    // Fires a laser from point `from` to point `to`, width `width`, visible for `life` seconds. Reuses a finished beam if there is one.
+    function fireBeam(from, to, color, width, life) {
+      let laser = beams.find(candidate => candidate.t <= 0);
+      if (!laser) {
+        if (beams.length > 60) return;
+        const core = new THREE.Mesh(beamGeometry, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+        const glow = new THREE.Mesh(beamGeometry, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false }));
+        addToScene(core);
+        addToScene(glow);
+        laser = { core, glow, t: 0 };
+        beams.push(laser);
+        disposables.push(core.material, glow.material);
+      }
+      tmpVec.copy(to).sub(from);
+      const length = tmpVec.length();
+      tmpQuat.setFromUnitVectors(UP, tmpVec.normalize());
+      for (const [mesh, meshWidth] of [[laser.core, width * 0.35], [laser.glow, width]]) {
+        mesh.position.copy(from);
+        mesh.quaternion.copy(tmpQuat);
+        mesh.scale.set(meshWidth, length, meshWidth);
+        mesh.visible = true;
+      }
+      laser.glow.material.color.set(color);
+      laser.t = life;
+      laser.life = life;
     }
-    const tracers = [];
-    function tracer(a, dir, speed, color, life, onEnd) {
-      let Q = tracers.find(x => x.t <= 0);
-      if (!Q) { if (tracers.length > 120) return; const m = new T.Mesh(beamGeo, new T.MeshBasicMaterial({ color, transparent: true, blending: T.AdditiveBlending, depthWrite: false })); add(m); Q = { m, t: 0, p: new T.Vector3(), d: new T.Vector3() }; tracers.push(Q); disposables.push(m.material); }
-      Q.p.copy(a); Q.d.copy(dir).normalize(); Q.sp = speed; Q.t = life; Q.onEnd = onEnd; Q.m.material.color.set(color); Q.m.visible = true;
-      Q.m.quaternion.setFromUnitVectors(UP, Q.d); Q.m.scale.set(0.0006, 0.009, 0.0006);
+    const tracers = [];   // jet and turret bullets: { m: mesh, t: seconds left, p: position, d: direction, sp: speed, onEnd }
+    // Fires a tracer bullet from `from` heading in `direction` at `speed` for `life` seconds; calls onEnd() when it arrives.
+    function fireTracer(from, direction, speed, color, life, onEnd) {
+      let bullet = tracers.find(candidate => candidate.t <= 0);
+      if (!bullet) {
+        if (tracers.length > 120) return;
+        const mesh = new THREE.Mesh(beamGeometry, new THREE.MeshBasicMaterial({ color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+        addToScene(mesh);
+        bullet = { m: mesh, t: 0, p: new THREE.Vector3(), d: new THREE.Vector3() };
+        tracers.push(bullet);
+        disposables.push(mesh.material);
+      }
+      bullet.p.copy(from);
+      bullet.d.copy(direction).normalize();
+      bullet.sp = speed;
+      bullet.t = life;
+      bullet.onEnd = onEnd;
+      bullet.m.material.color.set(color);
+      bullet.m.visible = true;
+      bullet.m.quaternion.setFromUnitVectors(UP, bullet.d);
+      bullet.m.scale.set(0.0006, 0.009, 0.0006);
     }
 
     /* ---------- the cast ---------- */
-    const cities = ctx.cities.slice(), nug = ctx.nugget, saucers = [], aliens = [], jets = [], turrets = [];
-    const frame = n => { const u = new T.Vector3().crossVectors(n, Math.abs(n.y) > 0.95 ? new T.Vector3(1, 0, 0) : UP).normalize(); return [u, new T.Vector3().crossVectors(u, n)]; };
-    const offset = (n, a, r) => { const [u, w] = frame(n); return n.clone().multiplyScalar(Math.cos(r)).addScaledVector(u.multiplyScalar(Math.cos(a)).addScaledVector(w, Math.sin(a)), Math.sin(r)).normalize(); };
-    const orient = (obj, n, fwd) => { _v.copy(fwd).addScaledVector(n, -fwd.dot(n)).normalize(); const m = new T.Matrix4().makeBasis(_v, n, new T.Vector3().crossVectors(_v, n)); obj.quaternion.setFromRotationMatrix(m); };
-    const camDir = () => cam.position.clone().normalize();
+    const cities = ctx.cities.slice(), nugget = ctx.nugget;
+    const saucers = [], aliens = [], jets = [], turrets = [];
+    // Two perpendicular unit vectors lying on the planet's surface at direction `normal`.
+    const surfaceAxes = normal => {
+      const east = new THREE.Vector3().crossVectors(normal, Math.abs(normal.y) > 0.95 ? new THREE.Vector3(1, 0, 0) : UP).normalize();
+      return [east, new THREE.Vector3().crossVectors(east, normal)];
+    };
+    // The point on the planet `distance` radians away from `normal`, in compass direction `angle`.
+    const offsetPoint = (normal, angle, distance) => {
+      const [east, north] = surfaceAxes(normal);
+      return normal.clone().multiplyScalar(Math.cos(distance)).addScaledVector(east.multiplyScalar(Math.cos(angle)).addScaledVector(north, Math.sin(angle)), Math.sin(distance)).normalize();
+    };
+    // Turns `object` to stand on the planet at direction `normal`, facing the direction `forward`.
+    const orient = (object, normal, forward) => {
+      tmpVec.copy(forward).addScaledVector(normal, -forward.dot(normal)).normalize();
+      const basis = new THREE.Matrix4().makeBasis(tmpVec, normal, new THREE.Vector3().crossVectors(tmpVec, normal));
+      object.quaternion.setFromRotationMatrix(basis);
+    };
+    const cameraDirection = () => camera.position.clone().normalize();
     // target order: the city in view first, then the others
-    cities.sort((a, b) => b.n.dot(camDir()) - a.n.dot(camDir()));
-    let cityI = 0;
+    cities.sort((a, b) => b.n.dot(cameraDirection()) - a.n.dot(cameraDirection()));
+    let nextCityIndex = 0;
+
+    /* Adds a saucer that flies in from deep space. `role` is 'attack' (lasers a city), 'bbq' (barbecues the
+       nugget mountain) or 'lander' (lands beside the nuggets). `target` defaults to the next city in turn. */
     function spawnSaucer(role, target) {
-      const S = makeSaucer(); add(S.g);
-      const tgt = target || cities[cityI++ % cities.length];
-      const home = tgt.n.clone();
-      const from = home.clone().add(rv(1.2)).normalize().multiplyScalar(4.5);
-      const sc = { ...S, role, tgt, home, alt: R(1.075, 1.1), state: 'arrive', t: 0, from, pos: from.clone(), hp: 7 + Math.random() * 4, fire: R(0.5, 1.5), drift: Math.random() * 6, n: new T.Vector3(), id: saucers.length, roam: R(9, 16) };
-      saucers.push(sc); return sc;
+      const parts = makeSaucer();
+      addToScene(parts.group);
+      const chosenTarget = target || cities[nextCityIndex++ % cities.length];
+      const home = chosenTarget.n.clone();
+      const startPos = home.clone().add(randomVector(1.2)).normalize().multiplyScalar(4.5);
+      const saucer = {
+        ...parts, role, tgt: chosenTarget, home, alt: randomBetween(1.075, 1.1), state: 'arrive', t: 0, from: startPos, pos: startPos.clone(),
+        hp: 7 + Math.random() * 4, fire: randomBetween(0.5, 1.5), drift: Math.random() * 6, n: new THREE.Vector3(), id: saucers.length, roam: randomBetween(9, 16),
+      };
+      // Saucer fields: tgt = what it is attacking, alt = hover height (planet radius = 1), t = seconds in the current
+      // state, from = where its current flight started, hp = hit points, fire = seconds until next shot,
+      // drift = random angle offset for hovering, n = its direction from the centre, roam = seconds until it picks a new city.
+      saucers.push(saucer);
+      return saucer;
     }
-    function saucerHome(sc, t) {
-      if (sc.role === 'bbq' || sc.role === 'lander') return offset(nug.n, sc.id * 2.1 + t * 0.12, sc.role === 'lander' ? 0.055 : 0.03);
-      const R0 = (sc.tgt.Rw || 0.05) * 0.55; return offset(sc.home, sc.drift + t * 0.25, R0 * (0.6 + 0.4 * Math.sin(t * 0.3 + sc.id)));
+    // Where a hovering saucer wants to be at time t: circling its target city (or the nugget mountain), as a direction from the planet's centre.
+    function saucerHome(saucer, time) {
+      if (saucer.role === 'bbq' || saucer.role === 'lander') {
+        return offsetPoint(nugget.n, saucer.id * 2.1 + time * 0.12, saucer.role === 'lander' ? 0.055 : 0.03);
+      }
+      const orbitRadius = (saucer.tgt.Rw || 0.05) * 0.55;
+      return offsetPoint(saucer.home, saucer.drift + time * 0.25, orbitRadius * (0.6 + 0.4 * Math.sin(time * 0.3 + saucer.id)));
     }
-    function cityTarget(c) { return offset(c.n, Math.random() * 6.283, Math.sqrt(Math.random()) * (c.Rw || 0.05) * 0.85); }
-    let landed = null, nugEaten = 0, bbqK = 0;
-    function spawnAliens(n) {
+    // A random spot within a city (for laser strikes).
+    function cityTarget(city) { return offsetPoint(city.n, Math.random() * 6.283, Math.sqrt(Math.random()) * (city.Rw || 0.05) * 0.85); }
+
+    let landed = null, nuggetsEaten = 0, barbecueAmount = 0;   // the landed saucer (if any), how many nuggets eaten, how cooked the mountain is (0..1)
+    // Aliens walk out of the landed saucer toward the nugget pile. Does nothing until a saucer has landed.
+    function spawnAliens(count) {
       if (!landed) return;
-      for (let i = 0; i < n; i++) {
-        const A = makeAlien(); add(A.g);
-        const start = landed.ground.clone(), spot = ctx.nugget.api.pileWorld(aliens.length * 5 + 3).normalize();
-        aliens.push({ ...A, pos: start.clone(), spot: offset(spot, Math.random() * 6.28, 0.004), state: 'walk', t: Math.random() * 3, speed: R(0.006, 0.01), eat: R(1.5, 3) });
+      for (let i = 0; i < count; i++) {
+        const parts = makeAlien();
+        addToScene(parts.group);
+        const start = landed.ground.clone(), pileSpot = ctx.nugget.api.pileWorld(aliens.length * 5 + 3).normalize();
+        aliens.push({ ...parts, pos: start.clone(), spot: offsetPoint(pileSpot, Math.random() * 6.28, 0.004), state: 'walk', t: Math.random() * 3, speed: randomBetween(0.006, 0.01), eat: randomBetween(1.5, 3) });
+        // Alien fields: spot = where it eats, t = animation time, eat = seconds until the next nugget is swallowed.
       }
     }
-    function launchJets(n) { for (let i = 0; i < n; i++) { const g = makeJet([0x2f6fb0, 0xff4d4d, 0x7ed957, 0xffd23f, 0xffffff][jets.length % 5]); add(g); const c = cities[Math.floor(Math.random() * Math.min(cities.length, 6))]; jets.push({ g, pos: c.n.clone().multiplyScalar(1.02), vel: c.n.clone().multiplyScalar(0.05), target: null, cool: R(0.5, 1.5), ph: Math.random() * 6 }); } }
-    function buildTurrets(c) {
+    // Scrambles `count` jets from the first few cities.
+    function launchJets(count) {
+      for (let i = 0; i < count; i++) {
+        const group = makeJet([0x2f6fb0, 0xff4d4d, 0x7ed957, 0xffd23f, 0xffffff][jets.length % 5]);
+        addToScene(group);
+        const city = cities[Math.floor(Math.random() * Math.min(cities.length, 6))];
+        jets.push({ g: group, pos: city.n.clone().multiplyScalar(1.02), vel: city.n.clone().multiplyScalar(0.05), target: null, cool: randomBetween(0.5, 1.5), ph: Math.random() * 6 });
+        // Jet fields: vel = velocity, target = the saucer it is chasing, cool = seconds until it can shoot, ph = phase of its weaving.
+      }
+    }
+    // Puts three gun turrets round a city.
+    function buildTurrets(city) {
       for (let i = 0; i < 3; i++) {
-        const tu = makeTurret(), n = offset(c.n, i * 2.1 + Math.random(), (c.Rw || 0.05) * 0.95); add(tu.g);
-        ctx.placeOnSurface(tu.g, n, 1.0, Math.random() * 6); turrets.push({ ...tu, n, city: c, cool: R(0.3, 1.0) });
+        const turret = makeTurret(), normal = offsetPoint(city.n, i * 2.1 + Math.random(), (city.Rw || 0.05) * 0.95);
+        addToScene(turret.group);
+        ctx.placeOnSurface(turret.group, normal, 1.0, Math.random() * 6);
+        turrets.push({ ...turret, n: normal, city, cool: randomBetween(0.3, 1.0) });
       }
     }
-    const nearestSaucer = p => { let b = null, bd = 9; for (const s of saucers) { if (s.state === 'gone' || s.state === 'crash' || s.state === 'flee') continue; const d = s.pos.distanceTo(p); if (d < bd) { bd = d; b = s; } } return b; };
-    function damage(s, k) {
-      s.hp -= k;
-      if (s.hp <= 0 && s.state !== 'crash' && s.state !== 'flee' && s.state !== 'gone' && s !== landed) {
-        s.state = 'crash'; s.t = 0; s.spin = R(4, 8); s.vel = s.pos.clone().normalize().multiplyScalar(-0.02).add(rv(0.03));
-        explode(s.pos, 1.0, false); caption(['Direct hit!', 'Got one!', 'Saucer down!', 'Kaboom! One less saucer!'][Math.floor(Math.random() * 4)], true);
+    // The nearest saucer that is still a threat (not gone, crashing or fleeing) to point p, or null.
+    const nearestSaucer = point => {
+      let best = null, bestDistance = 9;
+      for (const saucer of saucers) {
+        if (saucer.state === 'gone' || saucer.state === 'crash' || saucer.state === 'flee') continue;
+        const distance = saucer.pos.distanceTo(point);
+        if (distance < bestDistance) { bestDistance = distance; best = saucer; }
+      }
+      return best;
+    };
+    // Hurts a saucer; when its hit points run out it starts to crash (unless it is the landed one).
+    function damage(saucer, amount) {
+      saucer.hp -= amount;
+      if (saucer.hp <= 0 && saucer.state !== 'crash' && saucer.state !== 'flee' && saucer.state !== 'gone' && saucer !== landed) {
+        saucer.state = 'crash';
+        saucer.t = 0;
+        saucer.spin = randomBetween(4, 8);
+        saucer.vel = saucer.pos.clone().normalize().multiplyScalar(-0.02).add(randomVector(0.03));
+        explode(saucer.pos, 1.0, false);
+        caption(['Direct hit!', 'Got one!', 'Saucer down!', 'Kaboom! One less saucer!'][Math.floor(Math.random() * 4)], true);
       }
     }
 
     /* ---------- the story ---------- */
+    // The timeline: [seconds since the start, what happens]. Each entry runs once when its time arrives.
     const SCRIPT = [
       [0.5, () => caption('🚨 RED ALERT! Strange lights in the sky… 🚨')],
       [3, () => spawnSaucer('attack')],
       [7, () => caption(`A flying saucer is attacking ${saucers[0].tgt.name}!`)],
       [15, () => spawnSaucer('attack')], [20, () => spawnSaucer('attack')], [24, () => spawnSaucer('attack')],
-      [30, () => { const a = spawnSaucer('bbq', { n: nug.n, name: nug.name }); a.alt = 1.085; const b = spawnSaucer('bbq', { n: nug.n, name: nug.name }); b.alt = 1.095; }],
+      [30, () => {
+        const first = spawnSaucer('bbq', { n: nugget.n, name: nugget.name }); first.alt = 1.085;
+        const second = spawnSaucer('bbq', { n: nugget.n, name: nugget.name }); second.alt = 1.095;
+      }],
       [34, () => caption('Oh no! They are heading for Mount Chicken Nugget! 🍗')],
       [38, () => spawnSaucer('attack')],
       [42, () => caption('They are BARBECUING the nuggets!! 🔥🔥🔥')],
       [48, () => spawnSaucer('attack')], [55, () => spawnSaucer('attack')], [58, () => spawnSaucer('attack')],
-      [62, () => { const L = spawnSaucer('lander', { n: nug.n, name: nug.name }); L.alt = 1.09; }],
+      [62, () => { const lander = spawnSaucer('lander', { n: nugget.n, name: nugget.name }); lander.alt = 1.09; }],
       [70, () => spawnSaucer('attack')],
       [72, () => caption('A saucer is landing next to the nuggets…')],
       [80, () => { spawnAliens(4); caption('👁️ ALIENS! With tentacles! They are EATING the nuggets! 👁️'); }],
       [84, () => spawnSaucer('attack')], [92, () => spawnSaucer('attack')],
       [96, () => { caption('Nathaniel Planet fights back! Scramble the jets! ✈️', true); launchJets(5); }],
-      [100, () => { const seen = new Set(saucers.filter(s => s.role === 'attack').map(s => s.tgt)); [...seen].slice(0, 5).forEach(buildTurrets); }],
+      [100, () => {                                                  // turrets go up round the cities that have been attacked
+        const attacked = new Set(saucers.filter(saucer => saucer.role === 'attack').map(saucer => saucer.tgt));
+        [...attacked].slice(0, 5).forEach(buildTurrets);
+      }],
       [104, () => spawnSaucer('attack')], [108, () => spawnAliens(3)],
       [112, () => { caption('The defence guns are firing! 💥', true); spawnSaucer('attack'); }],
       [120, () => { launchJets(4); spawnSaucer('attack'); }],
       [128, () => caption('More saucers! Hold on, everybody!')], [128, () => spawnSaucer('attack')], [134, () => spawnSaucer('attack')],
       [140, () => { spawnAliens(3); launchJets(3); }], [146, () => spawnSaucer('attack')], [150, () => spawnSaucer('attack')],
       [152, () => caption('The jets are winning! Saucers are falling out of the sky!', true)],
-      [168, () => { phase = 'retreat'; caption('The aliens are running away!! 🏃‍♂️👽', true); for (const A of aliens) { A.state = 'run'; A.speed *= 2.2; } }],
+      [168, () => {
+        phase = 'retreat';
+        caption('The aliens are running away!! 🏃‍♂️👽', true);
+        for (const alien of aliens) { alien.state = 'run'; alien.speed *= 2.2; }
+      }],
     ];
-    let si = 0, phase = 'attack', done = false, aliensDefeated = false, victoryT = Infinity;
+    // Progress through the show: next SCRIPT entry, phase ('attack' or 'retreat'), whether we have finished,
+    // whether all aliens are gone, and the countdown (seconds) until the victory screen.
+    let scriptIndex = 0, phase = 'attack', done = false, aliensDefeated = false, victoryCountdown = Infinity;
 
     /* ---------- the main loop ---------- */
-    let lastInput = performance.now(), autoT = 0;
-    const touch = () => { lastInput = performance.now(); };
-    for (const ev of ['pointerdown', 'wheel', 'keydown', 'touchstart']) addEventListener(ev, touch, { passive: true });
-    const _a = new T.Vector3(), _b = new T.Vector3(), _c = new T.Vector3();
+    let lastInputTime = performance.now(), autoCameraCooldown = 0;
+    const noteUserInput = () => { lastInputTime = performance.now(); };
+    for (const eventName of ['pointerdown', 'wheel', 'keydown', 'touchstart']) addEventListener(eventName, noteUserInput, { passive: true });
+    const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3(), tmpC = new THREE.Vector3();   // more scratch vectors
+
+    /* Called every frame with the clock time (seconds) and the frame time dt (seconds). Runs the script, then
+       moves saucers, aliens, jets and turrets, burns the fires, updates the effects, shakes the screen, and
+       moves the camera to the action if the user has been idle for a while. */
     const tick = (time, dt) => {
       if (done) return;
-      invT += dt;
-      while (si < SCRIPT.length && invT >= SCRIPT[si][0]) SCRIPT[si++][1]();
-      capT -= dt; if (capT <= 0) cap.classList.remove('on');
-      const hitP = Math.min(0.9, phase === 'retreat' ? 0.9 : invT < 130 ? 0.12 : 0.45);
-      // saucers
-      for (const s of saucers) {
-        s.t += dt;
-        for (let i = 0; i < s.lights.length; i++) s.lights[i].visible = ((Math.floor(time * 8) + i) % 3) !== 0;
-        s.body.rotation.y += dt * (s.state === 'crash' ? s.spin : 1.2);
-        if (s.state === 'arrive') {
-          const k = Math.min(1, s.t / 6), e = k * k * (3 - 2 * k), home = saucerHome(s, invT).multiplyScalar(s.alt);
-          s.pos.copy(s.from).lerp(home, e); if (k >= 1) { s.state = s.role === 'lander' ? 'land' : 'hover'; s.t = 0; }
-        } else if (s.state === 'hover') {
-          s.pos.lerp(saucerHome(s, invT).multiplyScalar(s.alt + 0.004 * Math.sin(invT * 2 + s.id)), 1 - Math.exp(-dt * 1.5));
-          if (s.role === 'attack') {
-            s.fire -= dt;
-            if (s.fire <= 0 && phase !== 'retreat') {
-              s.fire = R(0.5, 1.4); const p = cityTarget(s.tgt); _a.copy(s.pos).addScaledVector(s.pos.clone().normalize(), -0.006);
-              beam(_a, p, 0xff1a1a, 0.0044, 0.4); explode(p, 0.5, false);
-              if (Math.random() < 0.85) addFire(p, R(30, 70), R(0.7, 1.4));
-              if (!s.tgt._ignited) { s.tgt._ignited = true; for (let k = 0; k < 3; k++) addFire(cityTarget(s.tgt), R(45, 95), R(0.6, 1.3)); }
+      showTime += dt;
+      while (scriptIndex < SCRIPT.length && showTime >= SCRIPT[scriptIndex][0]) SCRIPT[scriptIndex++][1]();
+      captionTimeLeft -= dt;
+      if (captionTimeLeft <= 0) captionDiv.classList.remove('on');
+      // Chance that a defender's shot hits: low at first, higher later, very high during the retreat.
+      const hitChance = Math.min(0.9, phase === 'retreat' ? 0.9 : showTime < 130 ? 0.12 : 0.45);
+
+      // ---- saucers ----
+      for (const saucer of saucers) {
+        saucer.t += dt;
+        for (let i = 0; i < saucer.lights.length; i++) saucer.lights[i].visible = ((Math.floor(time * 8) + i) % 3) !== 0;   // chasing rim lights
+        saucer.body.rotation.y += dt * (saucer.state === 'crash' ? saucer.spin : 1.2);
+        if (saucer.state === 'arrive') {                                    // fly in from deep space, easing in and out
+          const progress = Math.min(1, saucer.t / 6), eased = progress * progress * (3 - 2 * progress);
+          const home = saucerHome(saucer, showTime).multiplyScalar(saucer.alt);
+          saucer.pos.copy(saucer.from).lerp(home, eased);
+          if (progress >= 1) { saucer.state = saucer.role === 'lander' ? 'land' : 'hover'; saucer.t = 0; }
+        } else if (saucer.state === 'hover') {
+          saucer.pos.lerp(saucerHome(saucer, showTime).multiplyScalar(saucer.alt + 0.004 * Math.sin(showTime * 2 + saucer.id)), 1 - Math.exp(-dt * 1.5));
+          if (saucer.role === 'attack') {
+            saucer.fire -= dt;
+            if (saucer.fire <= 0 && phase !== 'retreat') {                  // zap the city and start fires
+              saucer.fire = randomBetween(0.5, 1.4);
+              const strikePoint = cityTarget(saucer.tgt);
+              tmpA.copy(saucer.pos).addScaledVector(saucer.pos.clone().normalize(), -0.006);
+              fireBeam(tmpA, strikePoint, 0xff1a1a, 0.0044, 0.4);
+              explode(strikePoint, 0.5, false);
+              if (Math.random() < 0.85) addFire(strikePoint, randomBetween(30, 70), randomBetween(0.7, 1.4));
+              if (!saucer.tgt._ignited) {                                   // first hit on a city: a few extra fires
+                saucer.tgt._ignited = true;
+                for (let k = 0; k < 3; k++) addFire(cityTarget(saucer.tgt), randomBetween(45, 95), randomBetween(0.6, 1.3));
+              }
             }
-            s.roam -= dt;
-            if (s.roam <= 0 && phase !== 'retreat') {
+            saucer.roam -= dt;
+            if (saucer.roam <= 0 && phase !== 'retreat') {                  // time to pick a different city
               let next = cities[Math.floor(Math.random() * cities.length)];
-              if (cities.length > 1) { let tries = 0; while (next === s.tgt && tries++ < 5) next = cities[Math.floor(Math.random() * cities.length)]; }
-              s.tgt = next; s.home = next.n.clone(); s.from = s.pos.clone(); s.state = 'arrive'; s.t = 0; s.roam = R(9, 16);
+              if (cities.length > 1) {
+                let tries = 0;
+                while (next === saucer.tgt && tries++ < 5) next = cities[Math.floor(Math.random() * cities.length)];
+              }
+              saucer.tgt = next;
+              saucer.home = next.n.clone();
+              saucer.from = saucer.pos.clone();
+              saucer.state = 'arrive';
+              saucer.t = 0;
+              saucer.roam = randomBetween(9, 16);
               if (Math.random() < 0.4) caption(`A saucer zooms off to attack ${next.name}!`);
             }
-          } else if (s.role === 'bbq') {
-            s.fire -= dt;
-            if (s.fire <= 0 && phase !== 'retreat') { s.fire = R(0.15, 0.35); const p = offset(nug.n, Math.random() * 6.28, Math.random() * 0.03); beam(_a.copy(s.pos).addScaledVector(s.pos.clone().normalize(), -0.006), p, 0xff8a1a, 0.003, 0.25); if (Math.random() < 0.25) explode(p, 0.35, false); if (Math.random() < 0.08) addFire(p, R(20, 40), 0.8); note(p, 1); }
-            bbqK = Math.min(1, bbqK + dt / 30); nug.api.bbq(bbqK);
-            if (Math.random() < dt * 8) { const p = offset(nug.n, Math.random() * 6.28, Math.random() * 0.025); smokeP.emit(p, _v.copy(p).multiplyScalar(R(0.01, 0.02)), R(2, 4), 0.006, 0.03, [0.3, 0.27, 0.25], [0.55, 0.52, 0.5], 0.7); }
+          } else if (saucer.role === 'bbq') {                               // barbecue the nugget mountain
+            saucer.fire -= dt;
+            if (saucer.fire <= 0 && phase !== 'retreat') {
+              saucer.fire = randomBetween(0.15, 0.35);
+              const strikePoint = offsetPoint(nugget.n, Math.random() * 6.28, Math.random() * 0.03);
+              fireBeam(tmpA.copy(saucer.pos).addScaledVector(saucer.pos.clone().normalize(), -0.006), strikePoint, 0xff8a1a, 0.003, 0.25);
+              if (Math.random() < 0.25) explode(strikePoint, 0.35, false);
+              if (Math.random() < 0.08) addFire(strikePoint, randomBetween(20, 40), 0.8);
+              noteEvent(strikePoint, 1);
+            }
+            barbecueAmount = Math.min(1, barbecueAmount + dt / 30);
+            nugget.api.bbq(barbecueAmount);
+            if (Math.random() < dt * 8) {
+              const smokePoint = offsetPoint(nugget.n, Math.random() * 6.28, Math.random() * 0.025);
+              smokeParticles.emit(smokePoint, tmpVec.copy(smokePoint).multiplyScalar(randomBetween(0.01, 0.02)), randomBetween(2, 4), 0.006, 0.03, [0.3, 0.27, 0.25], [0.55, 0.52, 0.5], 0.7);
+            }
           }
-        } else if (s.state === 'land') {
-          const ground = saucerHome(s, 0).clone(); s.ground = ground.clone();
-          const k = Math.min(1, s.t / 7); s.pos.copy(ground).multiplyScalar(s.alt + (1.006 - s.alt) * k * k * (3 - 2 * k));
-          s.beam.visible = k < 1; if (k >= 1) { s.state = 'landed'; landed = s; nug.api.rain(false); }
-        } else if (s.state === 'landed') {
-          s.pos.copy(s.ground).multiplyScalar(1.006);
-          s.beam.visible = false;
-        } else if (s.state === 'crash') {
-          s.vel.addScaledVector(s.pos.clone().normalize(), -0.06 * dt); s.pos.addScaledVector(s.vel, dt); s.body.rotation.z = Math.sin(s.t * 3) * 0.6;
-          if (Math.random() < dt * 30) smokeP.emit(s.pos, rv(0.01), R(1, 2), 0.006, 0.02, [0.2, 0.2, 0.2], [0.5, 0.5, 0.5], 0.8);
-          if (Math.random() < dt * 20) fireP.emit(s.pos, rv(0.01), R(0.2, 0.4), 0.006, 0.012, [1, 0.8, 0.3], [0.8, 0.2, 0]);
-          if (s.pos.length() <= 1.004) { explode(s.pos, 1.6, true); addFire(s.pos.clone().normalize(), 80, 1.5); s.state = 'gone'; s.g.visible = false; }
-        } else if (s.state === 'flee') {
-          s.pos.multiplyScalar(1 + dt * (0.15 + s.t * 0.5)); s.body.rotation.y += dt * 8;
-          if (s.pos.length() > 6) { s.state = 'gone'; s.g.visible = false; }
+        } else if (saucer.state === 'land') {                               // lower gently onto the ground by the nuggets
+          const ground = saucerHome(saucer, 0).clone();
+          saucer.ground = ground.clone();
+          const progress = Math.min(1, saucer.t / 7);
+          saucer.pos.copy(ground).multiplyScalar(saucer.alt + (1.006 - saucer.alt) * progress * progress * (3 - 2 * progress));
+          saucer.beam.visible = progress < 1;
+          if (progress >= 1) { saucer.state = 'landed'; landed = saucer; nugget.api.rain(false); }
+        } else if (saucer.state === 'landed') {
+          saucer.pos.copy(saucer.ground).multiplyScalar(1.006);
+          saucer.beam.visible = false;
+        } else if (saucer.state === 'crash') {                              // spin out of control, trailing smoke and fire
+          saucer.vel.addScaledVector(saucer.pos.clone().normalize(), -0.06 * dt);
+          saucer.pos.addScaledVector(saucer.vel, dt);
+          saucer.body.rotation.z = Math.sin(saucer.t * 3) * 0.6;
+          if (Math.random() < dt * 30) smokeParticles.emit(saucer.pos, randomVector(0.01), randomBetween(1, 2), 0.006, 0.02, [0.2, 0.2, 0.2], [0.5, 0.5, 0.5], 0.8);
+          if (Math.random() < dt * 20) fireParticles.emit(saucer.pos, randomVector(0.01), randomBetween(0.2, 0.4), 0.006, 0.012, [1, 0.8, 0.3], [0.8, 0.2, 0]);
+          if (saucer.pos.length() <= 1.004) {                               // hit the ground
+            explode(saucer.pos, 1.6, true);
+            addFire(saucer.pos.clone().normalize(), 80, 1.5);
+            saucer.state = 'gone';
+            saucer.group.visible = false;
+          }
+        } else if (saucer.state === 'flee') {                               // accelerate away into space
+          saucer.pos.multiplyScalar(1 + dt * (0.15 + saucer.t * 0.5));
+          saucer.body.rotation.y += dt * 8;
+          if (saucer.pos.length() > 6) { saucer.state = 'gone'; saucer.group.visible = false; }
         }
-        if (s.state !== 'gone') { s.g.position.copy(s.pos); s.n.copy(s.pos).normalize(); _b.set(1, 0, 0); orient(s.g, s.n, _b.cross(s.n).lengthSq() > 1e-6 ? _b.set(0, 0, 1) : _b); if (s.state === 'hover' || s.state === 'arrive') { s.g.rotateX(Math.sin(invT * 1.3 + s.id) * 0.12); } }
-        if (s.state === 'hover' && s.role === 'bbq' && Math.random() < dt * 2) s.beam.visible = !s.beam.visible;
-        if (s.beam.visible) s.beam.scale.set(1, (s.pos.length() - 1) / SAUCER, 1);
+        if (saucer.state !== 'gone') {                                      // place and orient the model
+          saucer.group.position.copy(saucer.pos);
+          saucer.n.copy(saucer.pos).normalize();
+          tmpB.set(1, 0, 0);
+          orient(saucer.group, saucer.n, tmpB.cross(saucer.n).lengthSq() > 1e-6 ? tmpB.set(0, 0, 1) : tmpB);
+          if (saucer.state === 'hover' || saucer.state === 'arrive') saucer.group.rotateX(Math.sin(showTime * 1.3 + saucer.id) * 0.12);   // a little wobble
+        }
+        if (saucer.state === 'hover' && saucer.role === 'bbq' && Math.random() < dt * 2) saucer.beam.visible = !saucer.beam.visible;   // flickering tractor beam
+        if (saucer.beam.visible) saucer.beam.scale.set(1, (saucer.pos.length() - 1) / SAUCER_SIZE, 1);                                 // beam reaches the ground
       }
-      // aliens
-      for (const A of aliens) {
-        A.t += dt; wiggle(A, A.t, A.state === 'run' ? 9 : A.state === 'walk' ? 5 : 2.5, A.state === 'eat' ? 0.25 : 0.4);
-        if (A.state === 'walk' || A.state === 'run') {
-          const goal = A.state === 'run' ? landed ? landed.ground : A.pos : A.spot;
-          _a.copy(goal).sub(A.pos); const d = _a.length();
-          if (d < 0.003) { if (A.state === 'walk') A.state = 'eat'; else { A.state = 'home'; A.g.visible = false; } }
-          else { A.pos.addScaledVector(_a.normalize(), Math.min(d, A.speed * dt)).normalize(); orient(A.g, A.pos, _a); }
-          A.b.position.y = Math.abs(Math.sin(A.t * (A.state === 'run' ? 14 : 8))) * 0.08;
-        } else if (A.state === 'eat') {
-          A.b.rotation.x = 0.25 + Math.sin(A.t * 6) * 0.18; A.b.position.y = 0;
-          A.eat -= dt; if (A.eat <= 0) { A.eat = R(2, 4); nugEaten = Math.min(36, nugEaten + 1); nug.api.eat(nugEaten); note(A.pos, 2); for (let k = 0; k < 6; k++) fireP.emit(A.pos.clone().multiplyScalar(1.012), rv(0.01), 0.5, 0.004, 0.001, [1, 0.8, 0.3]); }
+
+      // ---- aliens ----
+      for (const alien of aliens) {
+        alien.t += dt;
+        wiggle(alien, alien.t, alien.state === 'run' ? 9 : alien.state === 'walk' ? 5 : 2.5, alien.state === 'eat' ? 0.25 : 0.4);
+        if (alien.state === 'walk' || alien.state === 'run') {
+          // walk to the nugget pile; run back to the landed saucer
+          const goal = alien.state === 'run' ? landed ? landed.ground : alien.pos : alien.spot;
+          tmpA.copy(goal).sub(alien.pos);
+          const distance = tmpA.length();
+          if (distance < 0.003) {                                           // arrived
+            if (alien.state === 'walk') alien.state = 'eat';
+            else { alien.state = 'home'; alien.group.visible = false; }
+          } else {
+            alien.pos.addScaledVector(tmpA.normalize(), Math.min(distance, alien.speed * dt)).normalize();
+            orient(alien.group, alien.pos, tmpA);
+          }
+          alien.bodyGroup.position.y = Math.abs(Math.sin(alien.t * (alien.state === 'run' ? 14 : 8))) * 0.08;   // bouncy steps
+        } else if (alien.state === 'eat') {
+          alien.bodyGroup.rotation.x = 0.25 + Math.sin(alien.t * 6) * 0.18;
+          alien.bodyGroup.position.y = 0;
+          alien.eat -= dt;
+          if (alien.eat <= 0) {                                             // swallow a nugget
+            alien.eat = randomBetween(2, 4);
+            nuggetsEaten = Math.min(36, nuggetsEaten + 1);
+            nugget.api.eat(nuggetsEaten);
+            noteEvent(alien.pos, 2);
+            for (let k = 0; k < 6; k++) fireParticles.emit(alien.pos.clone().multiplyScalar(1.012), randomVector(0.01), 0.5, 0.004, 0.001, [1, 0.8, 0.3]);
+          }
           // the eye keeps watching you
-          A.eye.lookAt(cam.position);
+          alien.eye.lookAt(camera.position);
         }
-        if (A.state !== 'home') { A.g.position.copy(A.pos); if (A.state !== 'walk' && A.state !== 'run') { _b.copy(nug.n).sub(A.pos); orient(A.g, A.pos.clone().normalize(), _b); } }
+        if (alien.state !== 'home') {
+          alien.group.position.copy(alien.pos);
+          if (alien.state !== 'walk' && alien.state !== 'run') {            // face the nuggets while eating
+            tmpB.copy(nugget.n).sub(alien.pos);
+            orient(alien.group, alien.pos.clone().normalize(), tmpB);
+          }
+        }
       }
-      if (!aliensDefeated && phase === 'retreat' && aliens.length && aliens.every(A => A.state === 'home')) {
-        aliensDefeated = true; for (const J of jets) J.leaving = true;
-        landed = null; caption('The last saucer is escaping! Bye bye, aliens! 👋', true);
-        for (const s of saucers) if (s.state !== 'gone' && s.state !== 'crash') { s.state = 'flee'; s.t = 0; }
-        victoryT = 3.5;
+      // Once every alien is back aboard during the retreat: jets head home, saucers flee, victory in 3.5 s.
+      if (!aliensDefeated && phase === 'retreat' && aliens.length && aliens.every(alien => alien.state === 'home')) {
+        aliensDefeated = true;
+        for (const jet of jets) jet.leaving = true;
+        landed = null;
+        caption('The last saucer is escaping! Bye bye, aliens! 👋', true);
+        for (const saucer of saucers) if (saucer.state !== 'gone' && saucer.state !== 'crash') { saucer.state = 'flee'; saucer.t = 0; }
+        victoryCountdown = 3.5;
       }
-      if (victoryT !== Infinity) { victoryT -= dt; if (victoryT <= 0) { victoryT = Infinity; victory(); } }
-      // jets
-      for (const J of jets) {
-        if (J.leaving) {
-          J.vel.lerp(J.pos.clone().normalize().multiplyScalar(0.16), 1 - Math.exp(-dt * 1.2));
-          J.pos.addScaledVector(J.vel, dt);
-          J.g.position.copy(J.pos); _c.copy(J.pos).add(J.vel); J.g.lookAt(_c); J.g.rotateY(-Math.PI / 2);
-          if (J.pos.clone().normalize().dot(camDir()) < -0.15 || J.pos.length() > 3) J.gone = true;
+      if (victoryCountdown !== Infinity) {
+        victoryCountdown -= dt;
+        if (victoryCountdown <= 0) { victoryCountdown = Infinity; victory(); }
+      }
+
+      // ---- jets ----
+      for (const jet of jets) {
+        if (jet.leaving) {                                                  // fly off up into space
+          jet.vel.lerp(jet.pos.clone().normalize().multiplyScalar(0.16), 1 - Math.exp(-dt * 1.2));
+          jet.pos.addScaledVector(jet.vel, dt);
+          jet.g.position.copy(jet.pos);
+          tmpC.copy(jet.pos).add(jet.vel);
+          jet.g.lookAt(tmpC);
+          jet.g.rotateY(-Math.PI / 2);
+          if (jet.pos.clone().normalize().dot(cameraDirection()) < -0.15 || jet.pos.length() > 3) jet.gone = true;
           continue;
         }
-        if (!J.target || J.target.state === 'gone' || J.target.state === 'crash' || J.target.state === 'flee') J.target = nearestSaucer(J.pos);
-        const goal = J.target ? _a.copy(J.target.pos).add(_c.copy(rv(1)).set(Math.cos(invT * 1.6 + J.ph), Math.sin(invT * 1.3 + J.ph), Math.cos(invT * 0.9 + J.ph)).multiplyScalar(0.03)) : _a.copy(J.pos).normalize().multiplyScalar(1.12);
-        _b.copy(goal).sub(J.pos); J.vel.lerp(_b.normalize().multiplyScalar(0.12), 1 - Math.exp(-dt * 2));
-        J.pos.addScaledVector(J.vel, dt); if (J.pos.length() < 1.03) J.pos.setLength(1.03);
-        J.g.position.copy(J.pos); _c.copy(J.pos).add(J.vel); J.g.lookAt(_c); J.g.rotateY(-Math.PI / 2);
-        J.cool -= dt;
-        if (J.target && J.cool <= 0 && J.pos.distanceTo(J.target.pos) < 0.12) {
-          J.cool = R(0.25, 0.6); const tgt = J.target;
-          tracer(J.pos, _b.copy(tgt.pos).sub(J.pos), 0.45, 0xffe14a, J.pos.distanceTo(tgt.pos) / 0.45, () => { if (Math.random() < hitP) { damage(tgt, 1); sparkP.emit(tgt.pos, rv(0.05), 0.4, 0.003, 0.001, [1, 1, 0.6], [1, 0.4, 0]); } });
-          note(J.pos, 0.5);
+        // chase the nearest saucer, weaving around it
+        if (!jet.target || jet.target.state === 'gone' || jet.target.state === 'crash' || jet.target.state === 'flee') jet.target = nearestSaucer(jet.pos);
+        const goal = jet.target
+          ? tmpA.copy(jet.target.pos).add(tmpC.copy(randomVector(1)).set(Math.cos(showTime * 1.6 + jet.ph), Math.sin(showTime * 1.3 + jet.ph), Math.cos(showTime * 0.9 + jet.ph)).multiplyScalar(0.03))
+          : tmpA.copy(jet.pos).normalize().multiplyScalar(1.12);
+        tmpB.copy(goal).sub(jet.pos);
+        jet.vel.lerp(tmpB.normalize().multiplyScalar(0.12), 1 - Math.exp(-dt * 2));
+        jet.pos.addScaledVector(jet.vel, dt);
+        if (jet.pos.length() < 1.03) jet.pos.setLength(1.03);               // never dip into the ground
+        jet.g.position.copy(jet.pos);
+        tmpC.copy(jet.pos).add(jet.vel);
+        jet.g.lookAt(tmpC);
+        jet.g.rotateY(-Math.PI / 2);
+        jet.cool -= dt;
+        if (jet.target && jet.cool <= 0 && jet.pos.distanceTo(jet.target.pos) < 0.12) {   // in range: shoot
+          jet.cool = randomBetween(0.25, 0.6);
+          const targetSaucer = jet.target;
+          fireTracer(jet.pos, tmpB.copy(targetSaucer.pos).sub(jet.pos), 0.45, 0xffe14a, jet.pos.distanceTo(targetSaucer.pos) / 0.45, () => {
+            if (Math.random() < hitChance) {
+              damage(targetSaucer, 1);
+              sparkParticles.emit(targetSaucer.pos, randomVector(0.05), 0.4, 0.003, 0.001, [1, 1, 0.6], [1, 0.4, 0]);
+            }
+          });
+          noteEvent(jet.pos, 0.5);
         }
       }
-      if (aliensDefeated) {
+      if (aliensDefeated) {                                                 // remove jets that have flown out of sight
         for (let i = jets.length - 1; i >= 0; i--) {
-          const J = jets[i];
-          if (J.gone) {
+          const jet = jets[i];
+          if (jet.gone) {
             jets.splice(i, 1);
-            const oi = objects.findIndex(o => o[0] === J.g); if (oi >= 0) objects.splice(oi, 1);
-            if (J.g.parent) J.g.parent.remove(J.g);
-            J.g.traverse(m => { if (m.isMesh && m.geometry) m.geometry.dispose(); });
+            const objectIndex = objects.findIndex(entry => entry[0] === jet.g);
+            if (objectIndex >= 0) objects.splice(objectIndex, 1);
+            if (jet.g.parent) jet.g.parent.remove(jet.g);
+            jet.g.traverse(mesh => { if (mesh.isMesh && mesh.geometry) mesh.geometry.dispose(); });
           }
         }
       }
-      // turrets
-      for (const tu of turrets) {
-        const tgt = nearestSaucer(tu.n); if (!tgt || tgt.pos.distanceTo(tu.n) > 0.2) continue;
-        tu.gun.lookAt(tu.g.worldToLocal(_a.copy(tgt.pos)).add(tu.gun.position)); tu.gun.rotateX(Math.PI / 2);
-        tu.cool -= dt;
-        if (tu.cool <= 0) { tu.cool = R(0.35, 0.8); const from = tu.n.clone().multiplyScalar(1.0 + U * 1.3); tracer(from, _b.copy(tgt.pos).sub(from), 0.5, 0xfff07a, from.distanceTo(tgt.pos) / 0.5, () => { if (Math.random() < hitP) damage(tgt, 1); }); fireP.emit(from, rv(0.005), 0.15, 0.004, 0.008, [1, 0.9, 0.5], [1, 0.4, 0]); }
+
+      // ---- turrets: swing round to the nearest saucer in range and shoot it ----
+      for (const turret of turrets) {
+        const targetSaucer = nearestSaucer(turret.n);
+        if (!targetSaucer || targetSaucer.pos.distanceTo(turret.n) > 0.2) continue;
+        turret.gun.lookAt(turret.group.worldToLocal(tmpA.copy(targetSaucer.pos)).add(turret.gun.position));
+        turret.gun.rotateX(Math.PI / 2);
+        turret.cool -= dt;
+        if (turret.cool <= 0) {
+          turret.cool = randomBetween(0.35, 0.8);
+          const muzzle = turret.n.clone().multiplyScalar(1.0 + townScale * 1.3);
+          fireTracer(muzzle, tmpB.copy(targetSaucer.pos).sub(muzzle), 0.5, 0xfff07a, muzzle.distanceTo(targetSaucer.pos) / 0.5, () => {
+            if (Math.random() < hitChance) damage(targetSaucer, 1);
+          });
+          fireParticles.emit(muzzle, randomVector(0.005), 0.15, 0.004, 0.008, [1, 0.9, 0.5], [1, 0.4, 0]);
+        }
       }
-      // fires
+
+      // ---- fires: each burning spot sheds flames and smoke while it lasts ----
       for (let i = fires.length - 1; i >= 0; i--) {
-        const F = fires[i]; F.life -= dt; if (F.life <= 0) { fires.splice(i, 1); continue; }
-        F.acc += dt * 22 * F.k * Math.min(1, F.life / 5);
-        while (F.acc >= 1) { F.acc--; fireP.emit(_a.copy(F.p).add(rv(0.004 * F.k)), _b.copy(F.n).multiplyScalar(R(0.006, 0.014)).add(rv(0.003)), R(0.4, 0.9), 0.004 * F.k, 0.001, Math.random() < 0.5 ? [1, 0.85, 0.3] : [1, 0.5, 0.1], [0.6, 0.08, 0.0]); if (Math.random() < 0.35) smokeP.emit(_a, _b.copy(F.n).multiplyScalar(R(0.008, 0.016)).add(rv(0.004)), R(2, 4), 0.006 * F.k, 0.03 * F.k, [0.25, 0.23, 0.22], [0.5, 0.48, 0.47], 0.65); }
+        const fire = fires[i];
+        fire.life -= dt;
+        if (fire.life <= 0) { fires.splice(i, 1); continue; }
+        fire.acc += dt * 22 * fire.k * Math.min(1, fire.life / 5);
+        while (fire.acc >= 1) {
+          fire.acc--;
+          fireParticles.emit(tmpA.copy(fire.p).add(randomVector(0.004 * fire.k)), tmpB.copy(fire.n).multiplyScalar(randomBetween(0.006, 0.014)).add(randomVector(0.003)), randomBetween(0.4, 0.9), 0.004 * fire.k, 0.001, Math.random() < 0.5 ? [1, 0.85, 0.3] : [1, 0.5, 0.1], [0.6, 0.08, 0.0]);
+          if (Math.random() < 0.35) smokeParticles.emit(tmpA, tmpB.copy(fire.n).multiplyScalar(randomBetween(0.008, 0.016)).add(randomVector(0.004)), randomBetween(2, 4), 0.006 * fire.k, 0.03 * fire.k, [0.25, 0.23, 0.22], [0.5, 0.48, 0.47], 0.65);
+        }
       }
-      // beams, tracers, flashes
-      for (const B of beams) { if (B.t <= 0) continue; B.t -= dt; const k = Math.max(0, B.t / B.life); B.core.material.opacity = k; B.glow.material.opacity = 0.45 * k; if (B.t <= 0) B.core.visible = B.glow.visible = false; }
-      for (const Q of tracers) { if (Q.t <= 0) continue; Q.t -= dt; Q.p.addScaledVector(Q.d, Q.sp * dt); Q.m.position.copy(Q.p); if (Q.t <= 0) { Q.m.visible = false; if (Q.onEnd) Q.onEnd(); } }
-      for (const F of flashes) { if (!F.sp.visible) continue; F.t += dt; const k = F.t / F.d; F.sp.scale.setScalar(F.s * (0.5 + k)); F.sp.material.opacity = Math.max(0, 1 - k); if (k >= 1) F.sp.visible = false; }
-      fireP.step(dt, 1.2, 0); smokeP.step(dt, 0.6, 0); sparkP.step(dt, 0.5, 0.08);
-      // screen shake
+
+      // ---- beams, tracers, flashes: fade out and hide when finished ----
+      for (const laser of beams) {
+        if (laser.t <= 0) continue;
+        laser.t -= dt;
+        const remaining = Math.max(0, laser.t / laser.life);
+        laser.core.material.opacity = remaining;
+        laser.glow.material.opacity = 0.45 * remaining;
+        if (laser.t <= 0) laser.core.visible = laser.glow.visible = false;
+      }
+      for (const bullet of tracers) {
+        if (bullet.t <= 0) continue;
+        bullet.t -= dt;
+        bullet.p.addScaledVector(bullet.d, bullet.sp * dt);
+        bullet.m.position.copy(bullet.p);
+        if (bullet.t <= 0) { bullet.m.visible = false; if (bullet.onEnd) bullet.onEnd(); }
+      }
+      for (const flash of flashes) {
+        if (!flash.sprite.visible) continue;
+        flash.age += dt;
+        const progress = flash.age / flash.duration;
+        flash.sprite.scale.setScalar(flash.size * (0.5 + progress));
+        flash.sprite.material.opacity = Math.max(0, 1 - progress);
+        if (progress >= 1) flash.sprite.visible = false;
+      }
+      fireParticles.step(dt, 1.2, 0);
+      smokeParticles.step(dt, 0.6, 0);
+      sparkParticles.step(dt, 0.5, 0.08);
+
+      // ---- screen shake: jitter the canvas, fading away ----
       shake = Math.max(0, shake - dt * 1.8);
       ctx.canvas.style.transform = shake > 0.01 ? `translate(${(Math.random() - 0.5) * 18 * shake}px,${(Math.random() - 0.5) * 18 * shake}px)` : '';
-      // automatic camera: after 20 s without a touch, go to wherever the most is happening
-      autoT -= dt;
-      if (performance.now() - lastInput > 20000 && autoT <= 0) {
-        autoT = 7; let best = null, bw = 0;
-        for (const e of events) { if (invT - e.t > 12) continue; let w = 0; for (const f of events) if (invT - f.t <= 12 && e.p.dot(f.p) > Math.cos(0.2)) w += f.w; if (w > bw) { bw = w; best = e; } }
-        if (best) ctx.setFocus(best.p.clone(), 1.5);
+
+      // ---- automatic camera: after 20 s without a touch, go to wherever the most is happening ----
+      autoCameraCooldown -= dt;
+      if (performance.now() - lastInputTime > 20000 && autoCameraCooldown <= 0) {
+        autoCameraCooldown = 7;
+        let bestEvent = null, bestWeight = 0;
+        for (const event of events) {                                       // pick the recent event with the most other events near it
+          if (showTime - event.t > 12) continue;
+          let weight = 0;
+          for (const other of events) if (showTime - other.t <= 12 && event.p.dot(other.p) > Math.cos(0.2)) weight += other.w;
+          if (weight > bestWeight) { bestWeight = weight; bestEvent = event; }
+        }
+        if (bestEvent) ctx.setFocus(bestEvent.p.clone(), 1.5);
       }
     };
     ctx.tickers.push(tick);
 
     /* ---------- victory, then back to normal ---------- */
+    // The victory party: banner, falling streamers, rising smileys and fireworks on a canvas. Lasts about 16 seconds, then calls end().
     function victory() {
       caption('🎉 VICTORY! 🎉', true);
-      const w = document.createElement('div'); w.className = 'inv-win';
-      w.innerHTML = '<canvas></canvas><div><h1>VICTORY!</h1><h2>Nathaniel Planet is saved! 😄</h2></div>';
-      document.body.appendChild(w);
-      const cols = ['#ff4d6d', '#ffd23f', '#4ecdc4', '#9b7bff', '#7ed957', '#ff9f43', '#ffffff', '#ff9ff3'];
-      for (let i = 0; i < 90; i++) { const s = document.createElement('div'); s.className = 'inv-streamer'; s.style.left = Math.random() * 100 + 'vw'; s.style.background = `repeating-linear-gradient(45deg,${cols[i % 8]} 0 8px,${cols[(i + 3) % 8]} 8px 16px)`; s.style.animationDuration = R(3, 7) + 's'; s.style.animationDelay = R(0, 6) + 's'; s.style.height = R(40, 110) + 'px'; w.appendChild(s); }
-      const SM = ['😀', '😄', '😁', '🥳', '😊', '🤩', '😆'];
-      for (let i = 0; i < 40; i++) { const s = document.createElement('div'); s.className = 'inv-smile'; s.textContent = SM[i % SM.length]; s.style.left = Math.random() * 95 + 'vw'; s.style.animationDuration = R(4, 8) + 's'; s.style.animationDelay = R(0, 7) + 's'; s.style.fontSize = R(30, 64) + 'px'; w.appendChild(s); }
-      const cv = w.querySelector('canvas'), g2 = cv.getContext('2d'); cv.width = innerWidth; cv.height = innerHeight;
-      const sparks = []; let last = performance.now(), boom = 0, alive = true;
+      const winDiv = document.createElement('div');
+      winDiv.className = 'inv-win';
+      winDiv.innerHTML = '<canvas></canvas><div><h1>VICTORY!</h1><h2>Nathaniel Planet is saved! 😄</h2></div>';
+      document.body.appendChild(winDiv);
+      const partyColors = ['#ff4d6d', '#ffd23f', '#4ecdc4', '#9b7bff', '#7ed957', '#ff9f43', '#ffffff', '#ff9ff3'];
+      for (let i = 0; i < 90; i++) {                                        // streamers
+        const streamer = document.createElement('div');
+        streamer.className = 'inv-streamer';
+        streamer.style.left = Math.random() * 100 + 'vw';
+        streamer.style.background = `repeating-linear-gradient(45deg,${partyColors[i % 8]} 0 8px,${partyColors[(i + 3) % 8]} 8px 16px)`;
+        streamer.style.animationDuration = randomBetween(3, 7) + 's';
+        streamer.style.animationDelay = randomBetween(0, 6) + 's';
+        streamer.style.height = randomBetween(40, 110) + 'px';
+        winDiv.appendChild(streamer);
+      }
+      const smileys = ['😀', '😄', '😁', '🥳', '😊', '🤩', '😆'];
+      for (let i = 0; i < 40; i++) {                                        // rising smileys
+        const smiley = document.createElement('div');
+        smiley.className = 'inv-smile';
+        smiley.textContent = smileys[i % smileys.length];
+        smiley.style.left = Math.random() * 95 + 'vw';
+        smiley.style.animationDuration = randomBetween(4, 8) + 's';
+        smiley.style.animationDelay = randomBetween(0, 7) + 's';
+        smiley.style.fontSize = randomBetween(30, 64) + 'px';
+        winDiv.appendChild(smiley);
+      }
+      // Fireworks: bursts of sparks that fly outward, fall and fade, drawn on the canvas.
+      const fireworkCanvas = winDiv.querySelector('canvas'), fireworkCtx = fireworkCanvas.getContext('2d');
+      fireworkCanvas.width = innerWidth;
+      fireworkCanvas.height = innerHeight;
+      const sparks = [];
+      let lastFrameTime = performance.now(), burstCountdown = 0, running = true;
       const loop = now => {
-        if (!alive) return; requestAnimationFrame(loop);
-        const dt = Math.min(0.05, (now - last) / 1000); last = now; boom -= dt;
-        if (boom <= 0) { boom = R(0.15, 0.5); const x = R(0.1, 0.9) * cv.width, y = R(0.1, 0.5) * cv.height, c = cols[Math.floor(Math.random() * 7)], n = 70; for (let i = 0; i < n; i++) { const a = i / n * 6.283, sp = R(80, 260); sparks.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, l: R(1, 1.8), c }); } }
-        g2.globalCompositeOperation = 'destination-out'; g2.fillStyle = 'rgba(0,0,0,0.18)'; g2.fillRect(0, 0, cv.width, cv.height); g2.globalCompositeOperation = 'lighter';
-        for (let i = sparks.length - 1; i >= 0; i--) { const p = sparks[i]; p.l -= dt; if (p.l <= 0) { sparks.splice(i, 1); continue; } p.vy += 120 * dt; p.vx *= 1 - dt; p.vy *= 1 - dt * 0.5; p.x += p.vx * dt; p.y += p.vy * dt; g2.fillStyle = p.c; g2.globalAlpha = Math.min(1, p.l); g2.beginPath(); g2.arc(p.x, p.y, 2.4, 0, 6.3); g2.fill(); }
-        g2.globalAlpha = 1;
+        if (!running) return;
+        requestAnimationFrame(loop);
+        const dt = Math.min(0.05, (now - lastFrameTime) / 1000);
+        lastFrameTime = now;
+        burstCountdown -= dt;
+        if (burstCountdown <= 0) {                                          // a new firework burst
+          burstCountdown = randomBetween(0.15, 0.5);
+          const x = randomBetween(0.1, 0.9) * fireworkCanvas.width, y = randomBetween(0.1, 0.5) * fireworkCanvas.height;
+          const color = partyColors[Math.floor(Math.random() * 7)], sparkCount = 70;
+          for (let i = 0; i < sparkCount; i++) {
+            const angle = i / sparkCount * 6.283, speed = randomBetween(80, 260);
+            sparks.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, l: randomBetween(1, 1.8), c: color });   // l: seconds of life left
+          }
+        }
+        // fade the previous frame a little (leaves trails), then draw the sparks additively
+        fireworkCtx.globalCompositeOperation = 'destination-out';
+        fireworkCtx.fillStyle = 'rgba(0,0,0,0.18)';
+        fireworkCtx.fillRect(0, 0, fireworkCanvas.width, fireworkCanvas.height);
+        fireworkCtx.globalCompositeOperation = 'lighter';
+        for (let i = sparks.length - 1; i >= 0; i--) {
+          const spark = sparks[i];
+          spark.l -= dt;
+          if (spark.l <= 0) { sparks.splice(i, 1); continue; }
+          spark.vy += 120 * dt;                                             // gravity
+          spark.vx *= 1 - dt;
+          spark.vy *= 1 - dt * 0.5;
+          spark.x += spark.vx * dt;
+          spark.y += spark.vy * dt;
+          fireworkCtx.fillStyle = spark.c;
+          fireworkCtx.globalAlpha = Math.min(1, spark.l);
+          fireworkCtx.beginPath();
+          fireworkCtx.arc(spark.x, spark.y, 2.4, 0, 6.3);
+          fireworkCtx.fill();
+        }
+        fireworkCtx.globalAlpha = 1;
       };
       requestAnimationFrame(loop);
-      setTimeout(() => { w.style.opacity = 0; }, 15000);
-      setTimeout(() => { alive = false; w.remove(); end(); }, 16500);
+      setTimeout(() => { winDiv.style.opacity = 0; }, 15000);               // fade out, then clean up and end the show
+      setTimeout(() => { running = false; winDiv.remove(); end(); }, 16500);
     }
+
+    // Ends the show and puts everything back: removes our ticker, listeners, 3D objects, textures and overlays,
+    // resets the nugget mountain, and tells index.html we are finished.
     function end() {
       done = true;
-      const i = ctx.tickers.indexOf(tick); if (i >= 0) ctx.tickers.splice(i, 1);
-      for (const ev of ['pointerdown', 'wheel', 'keydown', 'touchstart']) removeEventListener(ev, touch);
-      for (const [o, p] of objects) p.remove(o);
-      const geos = new Set(); for (const [o] of objects) o.traverse(m => { if (m.isMesh && m.geometry) geos.add(m.geometry); });
-      geos.forEach(g => g.dispose()); disposables.forEach(d => d && d.dispose && d.dispose());
+      const tickerIndex = ctx.tickers.indexOf(tick);
+      if (tickerIndex >= 0) ctx.tickers.splice(tickerIndex, 1);
+      for (const eventName of ['pointerdown', 'wheel', 'keydown', 'touchstart']) removeEventListener(eventName, noteUserInput);
+      for (const [object, parent] of objects) parent.remove(object);
+      const geometries = new Set();
+      for (const [object] of objects) object.traverse(mesh => { if (mesh.isMesh && mesh.geometry) geometries.add(mesh.geometry); });
+      geometries.forEach(geometry => geometry.dispose());
+      disposables.forEach(item => item && item.dispose && item.dispose());
       ctx.scene.remove(envLight);
-      nug.api.reset(); ctx.canvas.style.transform = '';
-      cap.remove(); alertDiv.remove(); document.body.classList.remove('invading');
+      nugget.api.reset();
+      ctx.canvas.style.transform = '';
+      captionDiv.remove();
+      alertDiv.remove();
+      document.body.classList.remove('invading');
       ctx.releaseFocus();
       if (ctx.onEnd) ctx.onEnd();
     }
-    return { end, skipTo(t) { invT = t; }, advance(sec) { for (let k = 0; k < sec * 10 && !done; k++) tick(performance.now() / 1000, 0.1); }, saucers, aliens, jets };
+
+    // skipTo / advance are for testing: jump the clock, or run the simulation forward by `sec` seconds in 0.1 s steps.
+    return {
+      end,
+      skipTo(seconds) { showTime = seconds; },
+      advance(seconds) { for (let k = 0; k < seconds * 10 && !done; k++) tick(performance.now() / 1000, 0.1); },
+      saucers, aliens, jets,
+    };
   }
+
   injectCSS(); // the button's own styling and its age rule must exist before the dialog is ever opened
   root.NPInvasion = { confirm: confirmDialog, start };
 })(typeof window !== 'undefined' ? window : globalThis);
