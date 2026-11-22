@@ -1044,66 +1044,132 @@ function build() {
 
   /* ---------- towns: each with its own personality (see city-gen.js), rebuilt for each age ---------- */
   const TOWN_S = 0.025 * K;                       // world size of one town unit (one small house)
-  const AGE_R = { stone: 1, steam: 1, modern: 2, space: 2.66 };
-  cities.forEach(c => { c.Rw = c.Ru * TOWN_S; });
-  let townGroup = new T.Group(); planetGroup.add(townGroup);
+  const AGE_R = { stone: 1, steam: 1, modern: 2, space: 2.66 };   // how much bigger a town is in each age
+  cities.forEach(city => { city.Rw = city.Ru * TOWN_S; });         // Ru: radius in town units, Rw: radius in world units
+  let townGroup = new T.Group();                                    // holds all the town meshes for the current age
+  planetGroup.add(townGroup);
+  // Spots that modern cities must not spread over: the three special volcanoes and every mountain group, each with a radius.
   const avoidN = [fugi.n, fug2.n, nug.n].map((n, i) => [n, [0.075, 0.03, 0.045][i]]).concat(mtnN.map(n => [n, 0.022]));
-  const townPrep = [];
+  const townPrep = [];   // everything needed to (re)build each town, kept so towns can be rebuilt for each age
   {
-    const order = ['walled', 'castle', 'cathedral', 'market', 'windmills', 'factory', 'walled', 'castle', 'cathedral', 'market', 'factory', 'windmills'];
-    let oi = 0;
-    cities.forEach((c, idx) => {
-      const n = c.n, uu = new T.Vector3().crossVectors(n, Math.abs(n.y) > 0.95 ? new T.Vector3(1, 0, 0) : UP).normalize(), ww = new T.Vector3().crossVectors(uu, n);
-      const rot = rng() * 6.28, ua = uu.clone().multiplyScalar(Math.cos(rot)).addScaledVector(ww, Math.sin(rot)), wa = new T.Vector3().crossVectors(ua, n);
-      const root = new T.Matrix4().makeBasis(ua.clone().multiplyScalar(TOWN_S), n.clone().multiplyScalar(TOWN_S), wa.clone().multiplyScalar(TOWN_S)).setPosition(n);
-      const inv = new T.Matrix4().makeBasis(ua, n, wa).invert(), toLocal = v => { const q = v.clone().sub(n).applyMatrix4(inv); return [q.x / TOWN_S, q.z / TOWN_S]; };
-      const wv = new T.Vector3(), land = (x, z) => { wv.set(x, 0, z).applyMatrix4(root).normalize(); return P.isLand([wv.x, wv.y, wv.z]); };
-      const landClear = (x, z) => { if (!land(x, z)) return false; for (const [m, r] of avoidN) if (wv.dot(m) > Math.cos(r)) return false; return true; };   // wv set by land()
+    const styleOrder = ['walled', 'castle', 'cathedral', 'market', 'windmills', 'factory', 'walled', 'castle', 'cathedral', 'market', 'factory', 'windmills'];
+    let styleIndex = 0;
+    cities.forEach((city, idx) => {
+      const n = city.n;
+      // A local flat frame at the city, rotated by a random angle: `townAxisA` and `townAxisB` lie along the ground.
+      const east = new T.Vector3().crossVectors(n, Math.abs(n.y) > 0.95 ? new T.Vector3(1, 0, 0) : UP).normalize();
+      const north = new T.Vector3().crossVectors(east, n);
+      const rotation = rng() * 6.28;
+      const townAxisA = east.clone().multiplyScalar(Math.cos(rotation)).addScaledVector(north, Math.sin(rotation));
+      const townAxisB = new T.Vector3().crossVectors(townAxisA, n);
+      // root: turns town-unit coordinates (x, 0, z) into world positions on the planet.
+      const root = new T.Matrix4().makeBasis(townAxisA.clone().multiplyScalar(TOWN_S), n.clone().multiplyScalar(TOWN_S), townAxisB.clone().multiplyScalar(TOWN_S)).setPosition(n);
+      const inverse = new T.Matrix4().makeBasis(townAxisA, n, townAxisB).invert();
+      // World point -> town-unit [x, z].
+      const toLocal = point => {
+        const local = point.clone().sub(n).applyMatrix4(inverse);
+        return [local.x / TOWN_S, local.z / TOWN_S];
+      };
+      const worldPoint = new T.Vector3();
+      // Is town-unit position (x, z) on land?  (Leaves the world position in `worldPoint`.)
+      const land = (x, z) => {
+        worldPoint.set(x, 0, z).applyMatrix4(root).normalize();
+        return P.isLand([worldPoint.x, worldPoint.y, worldPoint.z]);
+      };
+      // Land, and also clear of volcanoes and mountains (used for the big modern and space-age cities).
+      const landClear = (x, z) => {
+        if (!land(x, z)) return false;
+        for (const [avoidDirection, avoidRadius] of avoidN) if (worldPoint.dot(avoidDirection) > Math.cos(avoidRadius)) return false;   // worldPoint was set by land()
+        return true;
+      };
+      // Which way is the sea? (angle of the first non-land spot found round the town, or null if the town is inland)
       let seaDir = null;
-      for (let k = 0; k < 24 && seaDir === null; k++) for (const r of [c.Ru * 0.9, c.Ru * 1.3]) { const a = k / 24 * 6.28; if (!land(Math.sin(a) * r, Math.cos(a) * r)) { seaDir = a; break; } }
-      const railLocal = [], station = [];
-      for (const e of rail.edges) for (const [end, pts] of [[e.a, e.pts], [e.b, e.pts.slice().reverse()]]) {
-        if (end !== c) continue;
-        const loc = pts.slice(0, 160).map(toLocal).filter(q => Math.hypot(q[0], q[1]) < c.Ru * 3.6);
-        railLocal.push(...loc);
-        if (loc.length > 2) { const a = loc[0], b = loc[2]; station.push([a[0], a[1], Math.atan2(b[0] - a[0], b[1] - a[1])]); }
+      for (let k = 0; k < 24 && seaDir === null; k++) {
+        for (const radius of [city.Ru * 0.9, city.Ru * 1.3]) {
+          const seaAngle = k / 24 * 6.28;
+          if (!land(Math.sin(seaAngle) * radius, Math.cos(seaAngle) * radius)) { seaDir = seaAngle; break; }
+        }
       }
+      // Railway: the track points near this city (in town units) and where a station should stand at the end of each line.
+      const railLocal = [], station = [];
+      for (const edge of rail.edges) for (const [end, points] of [[edge.a, edge.pts], [edge.b, edge.pts.slice().reverse()]]) {
+        if (end !== city) continue;
+        const nearby = points.slice(0, 160).map(toLocal).filter(point => Math.hypot(point[0], point[1]) < city.Ru * 3.6);
+        railLocal.push(...nearby);
+        if (nearby.length > 2) {
+          const first = nearby[0], third = nearby[2];
+          station.push([first[0], first[1], Math.atan2(third[0] - first[0], third[1] - first[1])]);   // [x, z, direction the track runs]
+        }
+      }
+      // Pick the town's style: desert towns get a palace or market, some coastal towns a harbour, the rest take turns.
       let style;
-      if (c.biome === 'desert') style = idx % 2 ? 'palace' : 'market';
+      if (city.biome === 'desert') style = idx % 2 ? 'palace' : 'market';
       else if (seaDir !== null && idx % 3 === 0) style = 'harbour';
-      else style = order[oi++ % order.length];
-      c.style = style;
-      townPrep.push({ c, idx, root, land, landClear, railLocal, station, seaDir, style });
-      const hit = new T.Mesh(new T.SphereGeometry(1, 8, 6), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
-      hit.position.copy(c.n).multiplyScalar(1.005); hit.scale.setScalar(c.Rw * 0.8); c.hit = hit;
-      hit.userData = { kind: 'city', ref: c };
-      planetGroup.add(hit); pickables.push(hit);
-      c.label = addLabel(c.name, c.n, 1.0 + c.Rw * 0.55, '', () => select('city', c));
+      else style = styleOrder[styleIndex++ % styleOrder.length];
+      city.style = style;
+      townPrep.push({ c: city, idx, root, land, landClear, railLocal, station, seaDir, style });
+      // An invisible sphere over the town that you can click or tap.
+      const hitSphere = new T.Mesh(new T.SphereGeometry(1, 8, 6), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+      hitSphere.position.copy(city.n).multiplyScalar(1.005);
+      hitSphere.scale.setScalar(city.Rw * 0.8);
+      city.hit = hitSphere;
+      hitSphere.userData = { kind: 'city', ref: city };
+      planetGroup.add(hitSphere);
+      pickables.push(hitSphere);
+      city.label = addLabel(city.name, city.n, 1.0 + city.Rw * 0.55, '', () => select('city', city));
     });
   }
+  // Builds the meshes for one town (tp comes from townPrep) as it looks in the given age. Returns a Group.
   function buildTown(tp, age) {
-    const c = tp.c, R = c.Ru * AGE_R[age];
+    const city = tp.c, radius = city.Ru * AGE_R[age];
     const big = age === 'modern' || age === 'space';
-    const res = CityGen.build(T, { root: tp.root, sagK: TOWN_S / 2, R, biome: c.biome === 'ice' ? 'green' : c.biome, style: tp.style, seed: 9173 + tp.idx * 7919, age,
-      land: big ? tp.landClear : tp.land, rail: age === 'stone' ? [] : tp.railLocal.filter(q => Math.hypot(q[0], q[1]) < R * 1.3), station: age === 'stone' ? [] : tp.station, seaDir: tp.seaDir === null ? 0 : tp.seaDir,
-      flag: [0xff4d6d, 0xffd23f, 0x4ecdc4, 0x9b7bff][tp.idx % 4], flag2: [0x3d6fa8, 0x8a3a52, 0x2f8a4a][tp.idx % 3] });
-    const g = new T.Group();
-    const mg = new T.Mesh(res.ground, new T.MeshLambertMaterial({ vertexColors: true, transparent: true, depthWrite: false })); mg.renderOrder = 2;
-    g.add(mg, new T.Mesh(res.geo, toon(0xffffff, { vertexColors: true })), new T.Mesh(res.ink, inkMat));
-    g.userData.n = c.n; c.houses = res.houses;
-    return g;
+    const result = CityGen.build(T, {
+      root: tp.root, sagK: TOWN_S / 2, R: radius, biome: city.biome === 'ice' ? 'green' : city.biome, style: tp.style, seed: 9173 + tp.idx * 7919, age,
+      land: big ? tp.landClear : tp.land,
+      rail: age === 'stone' ? [] : tp.railLocal.filter(point => Math.hypot(point[0], point[1]) < radius * 1.3),     // no railway in the stone age
+      station: age === 'stone' ? [] : tp.station,
+      seaDir: tp.seaDir === null ? 0 : tp.seaDir,
+      flag: [0xff4d6d, 0xffd23f, 0x4ecdc4, 0x9b7bff][tp.idx % 4], flag2: [0x3d6fa8, 0x8a3a52, 0x2f8a4a][tp.idx % 3],
+    });
+    const group = new T.Group();
+    const groundMesh = new T.Mesh(result.ground, new T.MeshLambertMaterial({ vertexColors: true, transparent: true, depthWrite: false }));
+    groundMesh.renderOrder = 2;
+    group.add(groundMesh, new T.Mesh(result.geo, toon(0xffffff, { vertexColors: true })), new T.Mesh(result.ink, inkMat));
+    group.userData.n = city.n;
+    city.houses = result.houses;
+    return group;
   }
-  function disposeGroup(g) { g.traverse(o => { if (o.isMesh) { o.geometry.dispose(); if (o.material !== inkMat) o.material.dispose(); } }); }
+  // Frees the geometry and materials of everything inside `group`.
+  function disposeGroup(group) {
+    group.traverse(object => {
+      if (object.isMesh) {
+        object.geometry.dispose();
+        if (object.material !== inkMat) object.material.dispose();
+      }
+    });
+  }
   // towns behind the planet are not drawn
-  tickers.push(() => { const cd = camera.position.clone().normalize(); for (const g of townGroup.children) g.visible = g.userData.n.dot(cd) > -0.25; });
+  tickers.push(() => {
+    const cameraDirection = camera.position.clone().normalize();
+    for (const group of townGroup.children) group.visible = group.userData.n.dot(cameraDirection) > -0.25;
+  });
+  // Rebuilds every town for a new age, a few at a time (30 ms per slice) so the page stays smooth; calls done() at the end.
   function setTownAge(age, done) {
-    const fresh = new T.Group(); let i = 0;
+    const fresh = new T.Group();
+    let nextTown = 0;
     const step = () => {
-      const t0 = performance.now();
-      while (i < townPrep.length && performance.now() - t0 < 30) fresh.add(buildTown(townPrep[i++], age));
-      if (i < townPrep.length) { setTimeout(step, 0); return; }
-      planetGroup.remove(townGroup); disposeGroup(townGroup); townGroup = fresh; planetGroup.add(townGroup);
-      cities.forEach(c => { c.Rw = c.Ru * AGE_R[age] * TOWN_S; c.hit.scale.setScalar(c.Rw * 0.8); c.label.pos.copy(c.n).multiplyScalar(1.0 + Math.min(c.Rw * 0.4, 0.05) + (age === 'space' ? 0.06 : age === 'modern' ? 0.035 : 0.01)); });
+      const sliceStart = performance.now();
+      while (nextTown < townPrep.length && performance.now() - sliceStart < 30) fresh.add(buildTown(townPrep[nextTown++], age));
+      if (nextTown < townPrep.length) { setTimeout(step, 0); return; }
+      planetGroup.remove(townGroup);
+      disposeGroup(townGroup);
+      townGroup = fresh;
+      planetGroup.add(townGroup);
+      cities.forEach(city => {            // update each city's size, click area and label height for the new age
+        city.Rw = city.Ru * AGE_R[age] * TOWN_S;
+        city.hit.scale.setScalar(city.Rw * 0.8);
+        city.label.pos.copy(city.n).multiplyScalar(1.0 + Math.min(city.Rw * 0.4, 0.05) + (age === 'space' ? 0.06 : age === 'modern' ? 0.035 : 0.01));
+      });
       if (done) done();
     };
     step();
@@ -1111,48 +1177,72 @@ function build() {
   townPrep.forEach(tp => townGroup.add(buildTown(tp, 'steam')));
 
   /* trees, bushes and cacti: instanced */
+  // Each set: { m: the trees' mesh, ink: their outline mesh, arr: [{ n, b }] positions and biomes, mats/imats: their original matrices }.
   const treeSets = [];
+  // Hides (scales to zero) every tree that would be inside a town in this age, or near the space-age launch site; shows the rest.
   function clearTrees(age) {
     const zero = new T.Matrix4().makeScale(0, 0, 0);
-    for (const S of treeSets) { S.arr.forEach((t, i) => { const hide = cities.some(c => angle(t.n, c.n) < c.Ru * AGE_R[age] * TOWN_S * 1.02) || (age === 'space' && launch.n && angle(t.n, launch.n) < 0.04); S.m.setMatrixAt(i, hide ? zero : S.mats[i]); S.ink.setMatrixAt(i, hide ? zero : S.imats[i]); }); S.m.instanceMatrix.needsUpdate = S.ink.instanceMatrix.needsUpdate = true; }
+    for (const set of treeSets) {
+      set.arr.forEach((tree, i) => {
+        const hide = cities.some(city => angle(tree.n, city.n) < city.Ru * AGE_R[age] * TOWN_S * 1.02) || (age === 'space' && launch.n && angle(tree.n, launch.n) < 0.04);
+        set.m.setMatrixAt(i, hide ? zero : set.mats[i]);
+        set.ink.setMatrixAt(i, hide ? zero : set.imats[i]);
+      });
+      set.m.instanceMatrix.needsUpdate = set.ink.instanceMatrix.needsUpdate = true;
+    }
   }
   {
-    const gcol = (hex) => new T.Color(hex);
+    const toColor = hex => new T.Color(hex);
     const trunk = () => new T.CylinderGeometry(0.0022, 0.0032, 0.014, 6).translate(0, 0.007, 0);
-    const roundGeo = mergeParts([[trunk(), gcol(0x7a4a2a)], [new T.SphereGeometry(0.0125, 9, 7).translate(0, 0.0235, 0), gcol(0x4fb844)], [new T.SphereGeometry(0.0085, 8, 6).translate(0.006, 0.0305, 0.002), gcol(0x62cc52)]]);
-    const pineGeo = mergeParts([[trunk(), gcol(0x6b4226)], [new T.ConeGeometry(0.0125, 0.017, 8).translate(0, 0.0185, 0), gcol(0x2f8f4a)], [new T.ConeGeometry(0.0095, 0.015, 8).translate(0, 0.0295, 0), gcol(0x3aa557)], [new T.ConeGeometry(0.006, 0.012, 8).translate(0, 0.039, 0), gcol(0x4cbf68)]]);
-    const cactGeo = mergeParts([[new T.CylinderGeometry(0.0034, 0.0038, 0.022, 8).translate(0, 0.011, 0), gcol(0x4ea35a)], [new T.CylinderGeometry(0.0022, 0.0022, 0.008, 6).rotateZ(Math.PI / 2).translate(0.0055, 0.012, 0), gcol(0x4ea35a)], [new T.CylinderGeometry(0.0022, 0.0022, 0.007, 6).translate(0.0085, 0.0155, 0), gcol(0x4ea35a)]]);
+    // Three tree shapes, each merged into one geometry: round (trunk + two leaf balls), pine (trunk + three cones), cactus (stem + two arms).
+    const roundGeometry = mergeParts([[trunk(), toColor(0x7a4a2a)], [new T.SphereGeometry(0.0125, 9, 7).translate(0, 0.0235, 0), toColor(0x4fb844)], [new T.SphereGeometry(0.0085, 8, 6).translate(0.006, 0.0305, 0.002), toColor(0x62cc52)]]);
+    const pineGeometry = mergeParts([[trunk(), toColor(0x6b4226)], [new T.ConeGeometry(0.0125, 0.017, 8).translate(0, 0.0185, 0), toColor(0x2f8f4a)], [new T.ConeGeometry(0.0095, 0.015, 8).translate(0, 0.0295, 0), toColor(0x3aa557)], [new T.ConeGeometry(0.006, 0.012, 8).translate(0, 0.039, 0), toColor(0x4cbf68)]]);
+    const cactusGeometry = mergeParts([[new T.CylinderGeometry(0.0034, 0.0038, 0.022, 8).translate(0, 0.011, 0), toColor(0x4ea35a)], [new T.CylinderGeometry(0.0022, 0.0022, 0.008, 6).rotateZ(Math.PI / 2).translate(0.0055, 0.012, 0), toColor(0x4ea35a)], [new T.CylinderGeometry(0.0022, 0.0022, 0.007, 6).translate(0.0085, 0.0155, 0), toColor(0x4ea35a)]]);
+    // Choose up to 6500 tree spots: more in green country, fewer in savanna and desert, none on ice, high ground, or near towns, railways and mountains.
     const list = { round: [], pine: [], cact: [] };
     for (let i = 0; i < 50000 && list.round.length + list.pine.length + list.cact.length < 6500; i++) {
-      const d = P.randomDir(rng); if (!P.isLand(d)) continue;
-      const b = P.biome(d), h = P.relHeight(d);
-      if (h > 0.5) continue;
-      if (b === 'ice' || Math.abs(d[1]) > 0.75) continue;                     // nothing grows on the ice cap
-      const dens = b === 'green' ? 1 : b === 'savanna' ? 0.5 : 0.22;
-      if (rng() > dens) continue;
+      const d = P.randomDir(rng);
+      if (!P.isLand(d)) continue;
+      const biome = P.biome(d), height = P.relHeight(d);
+      if (height > 0.5) continue;
+      if (biome === 'ice' || Math.abs(d[1]) > 0.75) continue;                     // nothing grows on the ice cap
+      const density = biome === 'green' ? 1 : biome === 'savanna' ? 0.5 : 0.22;
+      if (rng() > density) continue;
       const n = v3(d);
       if (!nearLand(d, 0.008)) continue;
       if (angle(n, fugi.n) < 0.09 || angle(n, fug2.n) < 0.04 || angle(n, nug.n) < 0.065 || nearRail(n, 0.012)) continue;
-      if (cities.some(k => angle(n, k.n) < k.Ru * 0.025 * K * 1.08) || mtnN.some(m => angle(n, m) < 0.023)) continue;
-      const kind = b === 'desert' ? 'cact' : b === 'savanna' ? (rng() < 0.6 ? 'round' : 'cact') : (Math.abs(d[1]) > 0.62 || rng() < 0.4) ? 'pine' : 'round';
-      list[kind].push({ n, b });
+      if (cities.some(city => angle(n, city.n) < city.Ru * 0.025 * K * 1.08) || mtnN.some(mountain => angle(n, mountain) < 0.023)) continue;
+      const kind = biome === 'desert' ? 'cact' : biome === 'savanna' ? (rng() < 0.6 ? 'round' : 'cact') : (Math.abs(d[1]) > 0.62 || rng() < 0.4) ? 'pine' : 'round';
+      list[kind].push({ n, b: biome });
     }
-    const dummy = new T.Object3D(), tint = new T.Color(), inkM = new T.Matrix4(), sc = new T.Matrix4();
-    for (const [kind, geo] of [['round', roundGeo], ['pine', pineGeo], ['cact', cactGeo]]) {
-      const arr = list[kind]; if (!arr.length) continue;
-      const m = new T.InstancedMesh(geo, toon(0xffffff, { vertexColors: true }), arr.length);
-      const ink = new T.InstancedMesh(geo, inkMat, arr.length);
-      m.frustumCulled = ink.frustumCulled = false;
-      arr.forEach((t, i) => {
-        const s = (0.6 + rng() * 0.6) * K * (kind === 'cact' ? 0.9 : 1);
-        dummy.position.copy(t.n).multiplyScalar(0.997); dummy.quaternion.setFromUnitVectors(UP, t.n); dummy.rotateY(rng() * 6.28);
-        dummy.scale.setScalar(s); dummy.updateMatrix();
-        m.setMatrixAt(i, dummy.matrix);
-        inkM.copy(dummy.matrix).multiply(sc.makeScale(1.22, 1.12, 1.22)); ink.setMatrixAt(i, inkM);
-        const v = 0.85 + rng() * 0.3, hue = t.b === 'savanna' ? [1.18, 1.05, 0.62] : t.b === 'ice' ? [0.9, 1.1, 1.25] : [1, 1, 1];
-        tint.setRGB(v * hue[0], v * hue[1], v * hue[2]); m.setColorAt(i, tint);
+    // One instanced mesh (plus an outline mesh) per kind of tree: every tree gets a random size, spin and colour tint.
+    const dummy = new T.Object3D(), tint = new T.Color(), inkMatrix = new T.Matrix4(), inkScale = new T.Matrix4();
+    for (const [kind, geometry] of [['round', roundGeometry], ['pine', pineGeometry], ['cact', cactusGeometry]]) {
+      const arr = list[kind];
+      if (!arr.length) continue;
+      const mesh = new T.InstancedMesh(geometry, toon(0xffffff, { vertexColors: true }), arr.length);
+      const ink = new T.InstancedMesh(geometry, inkMat, arr.length);
+      mesh.frustumCulled = ink.frustumCulled = false;
+      arr.forEach((tree, i) => {
+        const size = (0.6 + rng() * 0.6) * K * (kind === 'cact' ? 0.9 : 1);
+        dummy.position.copy(tree.n).multiplyScalar(0.997);
+        dummy.quaternion.setFromUnitVectors(UP, tree.n);
+        dummy.rotateY(rng() * 6.28);
+        dummy.scale.setScalar(size);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(i, dummy.matrix);
+        inkMatrix.copy(dummy.matrix).multiply(inkScale.makeScale(1.22, 1.12, 1.22));
+        ink.setMatrixAt(i, inkMatrix);
+        const brightness = 0.85 + rng() * 0.3, hue = tree.b === 'savanna' ? [1.18, 1.05, 0.62] : tree.b === 'ice' ? [0.9, 1.1, 1.25] : [1, 1, 1];
+        tint.setRGB(brightness * hue[0], brightness * hue[1], brightness * hue[2]);
+        mesh.setColorAt(i, tint);
       });
-      planetGroup.add(m, ink); treeSets.push({ m, ink, arr, mats: Array.from({ length: arr.length }, (_, i) => { const q = new T.Matrix4(); m.getMatrixAt(i, q); return q; }), imats: Array.from({ length: arr.length }, (_, i) => { const q = new T.Matrix4(); ink.getMatrixAt(i, q); return q; }) });
+      planetGroup.add(mesh, ink);
+      treeSets.push({
+        m: mesh, ink, arr,
+        mats: Array.from({ length: arr.length }, (_, i) => { const matrix = new T.Matrix4(); mesh.getMatrixAt(i, matrix); return matrix; }),
+        imats: Array.from({ length: arr.length }, (_, i) => { const matrix = new T.Matrix4(); ink.getMatrixAt(i, matrix); return matrix; }),
+      });
     }
   }
 
