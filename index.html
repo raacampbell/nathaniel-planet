@@ -855,99 +855,192 @@ function build() {
   };
 
   /* ---------- countries: about eight on the big landmasses, and every decent island its own state ---------- */
+  // Each country: { name, col: [r,g,b], seed: grid cell it grows from, comp: landmass number, island?, n: label position }
   const countries = [];
   {
-    const cid = new Int16Array(GN).fill(-1), comp = new Int32Array(GN).fill(-1), carea = [], cells = [];
-    for (let s0 = 0; s0 < GN; s0++) {
-      if (!gLand[s0] || gIce[s0] || comp[s0] >= 0) continue;
-      const id = carea.length, st = [s0], list = []; let a = 0; comp[s0] = id;
-      while (st.length) { const k = st.pop(); list.push(k); a += Math.sqrt(1 - gDir[k * 3 + 1] ** 2); neighbours(k, q => { if (gLand[q] && !gIce[q] && comp[q] < 0) { comp[q] = id; st.push(q); } }); }
-      carea.push(a); cells.push(list);
+    const countryOfCell = new Int16Array(GN).fill(-1);        // which country each cell ends up in
+    const landmassOfCell = new Int32Array(GN).fill(-1);        // which landmass each (non-ice) land cell is on
+    const landmassAreas = [], landmassCells = [];
+    // Find every landmass by flood fill, with its area and its list of cells.
+    for (let start = 0; start < GN; start++) {
+      if (!gLand[start] || gIce[start] || landmassOfCell[start] >= 0) continue;
+      const landmassId = landmassAreas.length, stack = [start], cellList = [];
+      let area = 0;
+      landmassOfCell[start] = landmassId;
+      while (stack.length) {
+        const cell = stack.pop();
+        cellList.push(cell);
+        area += Math.sqrt(1 - gDir[cell * 3 + 1] ** 2);
+        neighbours(cell, next => { if (gLand[next] && !gIce[next] && landmassOfCell[next] < 0) { landmassOfCell[next] = landmassId; stack.push(next); } });
+      }
+      landmassAreas.push(area);
+      landmassCells.push(cellList);
     }
-    const total = carea.reduce((a, b) => a + b, 0), order = carea.map((a, i) => i).sort((a, b) => carea[b] - carea[a]);
-    const mainland = order.filter(i => carea[i] > total * 0.05), islands = order.filter(i => carea[i] <= total * 0.05 && carea[i] > total * 0.0025).slice(0, 10);
-    const mainTot = mainland.reduce((a, i) => a + carea[i], 0);
+    const totalArea = landmassAreas.reduce((sum, area) => sum + area, 0);
+    const bySize = landmassAreas.map((area, i) => i).sort((a, b) => landmassAreas[b] - landmassAreas[a]);   // landmass numbers, biggest first
+    const mainland = bySize.filter(i => landmassAreas[i] > totalArea * 0.05);                                // big landmasses
+    const islands = bySize.filter(i => landmassAreas[i] <= totalArea * 0.05 && landmassAreas[i] > totalArea * 0.0025).slice(0, 10);   // decent-sized islands (at most 10)
+    const mainlandArea = mainland.reduce((sum, i) => sum + landmassAreas[i], 0);
     const NAMES = ['Wobblia', 'Pufferland', 'Grand Duchy of Snorf', 'Toastonia', 'United Crumpets', 'Mumblavia', 'Kingdom of Fizz', 'Republic of Zig', 'Noodleheim', 'Gloopistan'];
-    const INAMES = ['Isle of Bap', 'Puddle Isles', 'Free State of Splosh', 'Little Plonk', 'Sploot', 'Isle of Wibble', 'Biscuit Rock', 'Paddle Isle', 'Dinkum', 'Mooch'];
-    const PAL = [[255, 120, 120], [255, 205, 90], [120, 210, 255], [190, 140, 255], [130, 230, 150], [255, 160, 220], [255, 170, 90], [100, 230, 210], [220, 240, 110], [170, 180, 255]];
+    const ISLAND_NAMES = ['Isle of Bap', 'Puddle Isles', 'Free State of Splosh', 'Little Plonk', 'Sploot', 'Isle of Wibble', 'Biscuit Rock', 'Paddle Isle', 'Dinkum', 'Mooch'];
+    const COUNTRY_COLORS = [[255, 120, 120], [255, 205, 90], [120, 210, 255], [190, 140, 255], [130, 230, 150], [255, 160, 220], [255, 170, 90], [100, 230, 210], [220, 240, 110], [170, 180, 255]];
+    // Choose starting cells ("seeds") for the mainland countries: about 8 in total, shared out by area, spread far apart
+    // and preferring cells that contain cities.
     const seeds = [];
-    for (const ci of mainland) {
-      const k = Math.max(1, Math.round(8 * carea[ci] / mainTot)), list = cells[ci];
-      const cityCells = cities.map(c => cellOf(c.n)).filter(k2 => comp[k2] === ci);
-      const pts = [];
-      const far = pool => { let best = -1, bd = -1; for (const q of pool) { let m = 9; for (const p of pts) m = Math.min(m, cellAng(p, q)); if (!pts.length) m = gDir[q * 3 + 1] + 2; if (m > bd) { bd = m; best = q; } } return best; };
-      for (let t = 0; t < k; t++) { const q = far(cityCells.length > t ? cityCells : list); if (q < 0) break; pts.push(q); }
-      for (const q of pts) seeds.push({ k: q, comp: ci });
+    for (const landmass of mainland) {
+      const countryCount = Math.max(1, Math.round(8 * landmassAreas[landmass] / mainlandArea)), cellList = landmassCells[landmass];
+      const cityCells = cities.map(city => cellOf(city.n)).filter(cell => landmassOfCell[cell] === landmass);
+      const chosen = [];
+      // The cell in `pool` farthest from all cells chosen so far (the first pick is the most southerly).
+      const farthest = pool => {
+        let best = -1, bestDistance = -1;
+        for (const candidate of pool) {
+          let nearestChosen = 9;
+          for (const other of chosen) nearestChosen = Math.min(nearestChosen, cellAng(other, candidate));
+          if (!chosen.length) nearestChosen = gDir[candidate * 3 + 1] + 2;
+          if (nearestChosen > bestDistance) { bestDistance = nearestChosen; best = candidate; }
+        }
+        return best;
+      };
+      for (let t = 0; t < countryCount; t++) {
+        const cell = farthest(cityCells.length > t ? cityCells : cellList);
+        if (cell < 0) break;
+        chosen.push(cell);
+      }
+      for (const cell of chosen) seeds.push({ k: cell, comp: landmass });
     }
-    seeds.forEach((sd, i) => countries.push({ name: NAMES[i % NAMES.length], col: PAL[i % PAL.length], seed: sd.k, comp: sd.comp }));
-    islands.forEach((ci, i) => { const list = cells[ci]; let best = list[0], bh = -1; for (const q of list) if (gH[q] > bh) { bh = gH[q]; best = q; } countries.push({ name: INAMES[i % INAMES.length], col: PAL[(seeds.length + i) % PAL.length], seed: best, comp: ci, island: true }); });
+    seeds.forEach((seed, i) => countries.push({ name: NAMES[i % NAMES.length], col: COUNTRY_COLORS[i % COUNTRY_COLORS.length], seed: seed.k, comp: seed.comp }));
+    // Each island is its own country, seeded at its highest point.
+    islands.forEach((landmass, i) => {
+      const cellList = landmassCells[landmass];
+      let best = cellList[0], bestHeight = -1;
+      for (const cell of cellList) if (gH[cell] > bestHeight) { bestHeight = gH[cell]; best = cell; }
+      countries.push({ name: ISLAND_NAMES[i % ISLAND_NAMES.length], col: COUNTRY_COLORS[(seeds.length + i) % COUNTRY_COLORS.length], seed: best, comp: landmass, island: true });
+    });
+
     // grow the countries over the land: crossing mountains is expensive, so borders follow the ridges
+    // (all countries grow at once from their seeds, always taking the cheapest next cell: Dijkstra with a binary heap)
     const dist = new Float64Array(GN).fill(Infinity), heap = [];
-    const push = (d, k, c) => { heap.push([d, k, c]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
-    const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[i], heap[m]] = [heap[m], heap[i]]; i = m; } } return top; };
-    countries.forEach((c, i) => { dist[c.seed] = 0; push(0, c.seed, i); });
+    const push = (cost, cell, country) => {
+      heap.push([cost, cell, country]);
+      let i = heap.length - 1;
+      while (i > 0) {
+        const parent = (i - 1) >> 1;
+        if (heap[parent][0] <= heap[i][0]) break;
+        [heap[parent], heap[i]] = [heap[i], heap[parent]];
+        i = parent;
+      }
+    };
+    const pop = () => {
+      const top = heap[0], last = heap.pop();
+      if (heap.length) {
+        heap[0] = last;
+        let i = 0;
+        for (;;) {
+          const left = 2 * i + 1, right = left + 1;
+          let smallest = i;
+          if (left < heap.length && heap[left][0] < heap[smallest][0]) smallest = left;
+          if (right < heap.length && heap[right][0] < heap[smallest][0]) smallest = right;
+          if (smallest === i) break;
+          [heap[i], heap[smallest]] = [heap[smallest], heap[i]];
+          i = smallest;
+        }
+      }
+      return top;
+    };
+    countries.forEach((country, i) => { dist[country.seed] = 0; push(0, country.seed, i); });
     while (heap.length) {
-      const [d, k, c] = pop(); if (d > dist[k] || cid[k] >= 0) continue; cid[k] = c;
-      neighbours(k, q => { if (comp[q] !== comp[k]) return; const nd = d + cellAng(k, q) * (1 + 5 * gH[q] * gH[q] * 4); if (nd < dist[q]) { dist[q] = nd; push(nd, q, c); } });
+      const [cost, cell, country] = pop();
+      if (cost > dist[cell] || countryOfCell[cell] >= 0) continue;
+      countryOfCell[cell] = country;
+      neighbours(cell, next => {
+        if (landmassOfCell[next] !== landmassOfCell[cell]) return;                        // countries stay on their own landmass
+        const newCost = cost + cellAng(cell, next) * (1 + 5 * gH[next] * gH[next] * 4);   // high ground is expensive to cross
+        if (newCost < dist[next]) { dist[next] = newCost; push(newCost, next, country); }
+      });
     }
     // tiny specks join whichever state is nearest
-    const fill = Int16Array.from(cid), q0 = []; for (let k = 0; k < GN; k++) if (fill[k] >= 0) q0.push(k);
-    for (let h = 0; h < q0.length; h++) { const k = q0[h]; neighbours(k, q => { if (fill[q] < 0) { fill[q] = fill[k]; q0.push(q); } }); }
-    for (let k = 0; k < GN; k++) if (gIce[k]) fill[k] = -1;
+    const filled = Int16Array.from(countryOfCell), spreadQueue = [];
+    for (let cell = 0; cell < GN; cell++) if (filled[cell] >= 0) spreadQueue.push(cell);
+    for (let head = 0; head < spreadQueue.length; head++) {
+      const cell = spreadQueue[head];
+      neighbours(cell, next => { if (filled[next] < 0) { filled[next] = filled[cell]; spreadQueue.push(next); } });
+    }
+    for (let cell = 0; cell < GN; cell++) if (gIce[cell]) filled[cell] = -1;
     // label each country at the middle of its land
-    countries.forEach((c, i) => {
-      const m = new T.Vector3(); for (let k = 0; k < GN; k++) if (cid[k] === i) m.x += gDir[k * 3], m.y += gDir[k * 3 + 1], m.z += gDir[k * 3 + 2];
-      if (m.lengthSq() < 1e-9) return; m.normalize();
-      let best = c.seed, bd = -2; for (let k = 0; k < GN; k++) if (cid[k] === i) { const dd = gDir[k * 3] * m.x + gDir[k * 3 + 1] * m.y + gDir[k * 3 + 2] * m.z; if (dd > bd) { bd = dd; best = k; } }
-      c.n = new T.Vector3(gDir[best * 3], gDir[best * 3 + 1], gDir[best * 3 + 2]);
-      addLabel(c.name, c.n, 1.03, 'country');
+    countries.forEach((country, i) => {
+      const centre = new T.Vector3();                                                  // average direction of the country's cells
+      for (let cell = 0; cell < GN; cell++) if (countryOfCell[cell] === i) centre.x += gDir[cell * 3], centre.y += gDir[cell * 3 + 1], centre.z += gDir[cell * 3 + 2];
+      if (centre.lengthSq() < 1e-9) return;
+      centre.normalize();
+      let best = country.seed, bestDot = -2;                                           // the country's cell closest to that average
+      for (let cell = 0; cell < GN; cell++) {
+        if (countryOfCell[cell] !== i) continue;
+        const dot = gDir[cell * 3] * centre.x + gDir[cell * 3 + 1] * centre.y + gDir[cell * 3 + 2] * centre.z;
+        if (dot > bestDot) { bestDot = dot; best = cell; }
+      }
+      country.n = new T.Vector3(gDir[best * 3], gDir[best * 3 + 1], gDir[best * 3 + 2]);
+      addLabel(country.name, country.n, 1.03, 'country');
     });
-    let polMesh = null, polBusy = false;
-    const polBtn = document.getElementById('polBtn');
-    polBtn.onclick = () => {
+    // The "show countries" button: the first time it is switched on, a worker paints the coloured country map
+    // (see planet-tile-worker.js); after that the button just shows and hides it.
+    let politicalMesh = null, politicalBusy = false;
+    const politicalButton = document.getElementById('polBtn');
+    politicalButton.onclick = () => {
       const on = !document.body.classList.contains('political');
-      document.body.classList.toggle('political', on); polBtn.classList.toggle('on', on);
-      if (polMesh) { polMesh.visible = on; return; }
-      if (!on || polBusy) return; polBusy = true;
-      const W2 = 2048, H2 = 1024, wk = new Worker('planet-tile-worker.js');
-      wk.onmessage = e => {
-        const cv = document.createElement('canvas'); cv.width = W2; cv.height = H2;
-        cv.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(e.data.data), W2, H2), 0, 0);
-        const tex = new T.CanvasTexture(cv); tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
-        polMesh = new T.Mesh(new T.SphereGeometry(1.0005, 160, 80), new T.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
-        polMesh.renderOrder = 1.5; polMesh.visible = document.body.classList.contains('political'); planetGroup.add(polMesh); wk.terminate();
+      document.body.classList.toggle('political', on);
+      politicalButton.classList.toggle('on', on);
+      if (politicalMesh) { politicalMesh.visible = on; return; }
+      if (!on || politicalBusy) return;
+      politicalBusy = true;
+      const mapWidth = 2048, mapHeight = 1024, politicalWorker = new Worker('planet-tile-worker.js');
+      politicalWorker.onmessage = event => {
+        const mapCanvas = document.createElement('canvas');
+        mapCanvas.width = mapWidth;
+        mapCanvas.height = mapHeight;
+        mapCanvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(event.data.data), mapWidth, mapHeight), 0, 0);
+        const texture = new T.CanvasTexture(mapCanvas);
+        texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+        politicalMesh = new T.Mesh(new T.SphereGeometry(1.0005, 160, 80), new T.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false }));
+        politicalMesh.renderOrder = 1.5;
+        politicalMesh.visible = document.body.classList.contains('political');
+        planetGroup.add(politicalMesh);
+        politicalWorker.terminate();
       };
-      wk.postMessage({ type: 'political', seed: SEED, W: W2, H: H2, GW, GH, ids: fill, cols: countries.map(c => c.col) });
+      politicalWorker.postMessage({ type: 'political', seed: SEED, W: mapWidth, H: mapHeight, GW, GH, ids: filled, cols: countries.map(country => country.col) });
     };
   }
 
   /* mountains: craggy, merged into two draw calls */
-  const mtnN = [];
-  const mtnBake = makeBaker();
-  const rockCols = [0x9a8c9e, 0x8a7f96, 0xa59a8a, 0x8f8499];
-  const sortedCand = cand.filter(c => c.h > 0.38).sort(() => rng() - 0.5);
-  const mtnGeos = [0, 1, 2].map(i => craggyCone(0.03, 0.055, 11, 3, 0.35, i * 17));
-  const capGeos = [0, 1, 2].map(i => craggyCone(0.0145, 0.028, 11, 2, 0.4, i * 31 + 5));
-  for (const c of sortedCand) {
+  const mtnN = [];                                          // directions of the mountain groups placed (also used to keep other things clear of them)
+  const mountainBaker = makeBaker();
+  const rockColors = [0x9a8c9e, 0x8a7f96, 0xa59a8a, 0x8f8499];
+  const shuffledCandidates = cand.filter(c => c.h > 0.38).sort(() => rng() - 0.5);       // high-ish land, in random order
+  const mountainShapes = [0, 1, 2].map(i => craggyCone(0.03, 0.055, 11, 3, 0.35, i * 17));    // three different rock shapes...
+  const snowCapShapes = [0, 1, 2].map(i => craggyCone(0.0145, 0.028, 11, 2, 0.4, i * 31 + 5)); // ...each with a matching snow cap
+  for (const candidate of shuffledCandidates) {
     if (mtnN.length >= 320) break;
-    if (angle(c.n, fugi.n) < 0.18 || angle(c.n, fug2.n) < 0.12 || angle(c.n, nug.n) < 0.1 || nearRail(c.n, 0.03)) continue;
-    if (cities.some(k => angle(c.n, k.n) < k.Ru * 0.025 * K + 0.02)) continue;
-    if (mtnN.some(m => angle(c.n, m) < 0.043 * RK)) continue;
-    mtnN.push(c.n);
-    const cluster = 1 + Math.floor(rng() * 3);
-    const u = new T.Vector3().crossVectors(c.n, UP).normalize(), w = new T.Vector3().crossVectors(c.n, u);
-    for (let k = 0; k < cluster; k++) {
-      const g = new T.Group();
-      const s = 0.65 + rng() * 0.9, gi = Math.floor(rng() * 3);
-      const body = withInk(new T.Mesh(mtnGeos[gi], toon(rockCols[Math.floor(rng() * 4)])), 1.12);
-      const cap = new T.Mesh(capGeos[gi], toon(0xffffff)); cap.position.y = 0.0285;
-      g.add(body, cap); g.scale.setScalar(s * K);
-      const p = c.n.clone().addScaledVector(u, (rng() - .5) * 0.027).addScaledVector(w, (rng() - .5) * 0.027).normalize();
-      placeOnSurface(g, p, 0.995, rng() * 6);
-      mtnBake.add(g);
+    // keep clear of the three special volcanoes, the railway, the cities and other mountain groups
+    if (angle(candidate.n, fugi.n) < 0.18 || angle(candidate.n, fug2.n) < 0.12 || angle(candidate.n, nug.n) < 0.1 || nearRail(candidate.n, 0.03)) continue;
+    if (cities.some(city => angle(candidate.n, city.n) < city.Ru * 0.025 * K + 0.02)) continue;
+    if (mtnN.some(other => angle(candidate.n, other) < 0.043 * RK)) continue;
+    mtnN.push(candidate.n);
+    const clusterSize = 1 + Math.floor(rng() * 3);          // 1 to 3 peaks per group
+    const east = new T.Vector3().crossVectors(candidate.n, UP).normalize(), north = new T.Vector3().crossVectors(candidate.n, east);
+    for (let k = 0; k < clusterSize; k++) {
+      const peak = new T.Group();
+      const size = 0.65 + rng() * 0.9, shapeIndex = Math.floor(rng() * 3);
+      const rock = withInk(new T.Mesh(mountainShapes[shapeIndex], toon(rockColors[Math.floor(rng() * 4)])), 1.12);
+      const snowCap = new T.Mesh(snowCapShapes[shapeIndex], toon(0xffffff));
+      snowCap.position.y = 0.0285;
+      peak.add(rock, snowCap);
+      peak.scale.setScalar(size * K);
+      const position = candidate.n.clone().addScaledVector(east, (rng() - .5) * 0.027).addScaledVector(north, (rng() - .5) * 0.027).normalize();
+      placeOnSurface(peak, position, 0.995, rng() * 6);
+      mountainBaker.add(peak);
     }
   }
-  mtnBake.finish(planetGroup);
+  mountainBaker.finish(planetGroup);
 
   /* ---------- towns: each with its own personality (see city-gen.js), rebuilt for each age ---------- */
   const TOWN_S = 0.025 * K;                       // world size of one town unit (one small house)
