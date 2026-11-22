@@ -11,3 +11,12 @@
 - Issues labeled as "Idea" are not complete yet and you should not work on them. Any issue that includes that label is off limits, even if it includes other labels. 
 - When a fix resolves a GitHub issue, reference it in the commit message (e.g. "fixes #1"), and once the fix is pushed, close the issue with `gh issue close <n>` and a one-line comment saying what was fixed or what was built. 
 
+## Code format
+* Write code that makes some effort to be human-readable
+* Descriptive variable and function names
+* Short comments (one or two sentences explaining what each function is)
+* White space where needed. 
+* Areas of the code that are hard to parse for a human or have gotchas should be commented.
+
+## Changes
+It is possible I edit this file or the README manually. You should re-read them before editing them just in case. Otherwise my changes may be over-written. 
