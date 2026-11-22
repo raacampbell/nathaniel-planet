@@ -3313,93 +3313,183 @@ function build() {
   LISTS.age.btn.onclick = () => showList(openList === 'age' ? null : 'age');
 
   /* ---------- detail tiles: very fine ground pictures, made on demand for the part of the planet you are looking at ---------- */
+  // When the camera is close to the ground, the nearest of 260 fixed patches of the planet (tiles, each 0.4 radians
+  // wide) are painted at high resolution by background workers (see planet-tile.js) and faded in over the normal texture.
   try {
-    const TILE_SPAN = 0.4, TILE_MAX = matchMedia('(pointer:coarse)').matches ? 9 : 14, NT = 260;
-    const centres = []; for (let i = 0; i < NT; i++) { const y = 1 - (i + 0.5) * 2 / NT, r = Math.sqrt(1 - y * y), ph = i * 2.399963; centres.push(new T.Vector3(Math.cos(ph) * r, y, Math.sin(ph) * r)); }
-    const tiles = new Map(), want = [], hw = navigator.hardwareConcurrency || 2;
-    const workers = []; for (let i = 0; i < Math.min(2, Math.max(1, hw - 1)); i++) { const wk = new Worker('planet-tile-worker.js'); wk.busy = null; workers.push(wk); }
-    const UPm = new T.Vector3(0, 1, 0);
+    const TILE_SPAN = 0.4, TILE_MAX = matchMedia('(pointer:coarse)').matches ? 9 : 14, TILE_COUNT = 260;   // fewer tiles at once on phones
+    // The 260 tile centres, spread evenly over the sphere (a spiral: the "golden angle" 2.399963 radians between neighbours).
+    const centres = [];
+    for (let i = 0; i < TILE_COUNT; i++) {
+      const y = 1 - (i + 0.5) * 2 / TILE_COUNT, ringRadius = Math.sqrt(1 - y * y), spiralAngle = i * 2.399963;
+      centres.push(new T.Vector3(Math.cos(spiralAngle) * ringRadius, y, Math.sin(spiralAngle) * ringRadius));
+    }
+    const tiles = new Map();      // tile number -> { id, n: centre, res: resolution painted so far, pending: resolution being painted, fade, mesh }
+    const wanted = [];            // tiles waiting for a worker: { t: tile, wr: resolution wanted, ang: angle from the view centre }
+    const hardwareThreads = navigator.hardwareConcurrency || 2;
+    const workers = [];           // up to two workers; worker.busy is the job it is doing, or null
+    for (let i = 0; i < Math.min(2, Math.max(1, hardwareThreads - 1)); i++) {
+      const worker = new Worker('planet-tile-worker.js');
+      worker.busy = null;
+      workers.push(worker);
+    }
+    const worldUp = new T.Vector3(0, 1, 0);
+    // A small curved patch of the sphere (32 x 32 squares) covering the tile round direction `n`, with picture coordinates.
     function tileMesh(n) {
-      const uu = new T.Vector3().crossVectors(n, UPm).normalize(), ww = new T.Vector3().crossVectors(n, uu), Hh = Math.tan(TILE_SPAN / 2), M = 32, pos = [], uv = [], idx = [];
-      for (let j = 0; j <= M; j++) for (let i = 0; i <= M; i++) {
-        const d = n.clone().addScaledVector(uu, (i / M * 2 - 1) * Hh).addScaledVector(ww, (j / M * 2 - 1) * Hh).normalize();
-        pos.push(d.x * 1.0004, d.y * 1.0004, d.z * 1.0004); uv.push(i / M, j / M);
+      const east = new T.Vector3().crossVectors(n, worldUp).normalize(), north = new T.Vector3().crossVectors(n, east);
+      const halfWidth = Math.tan(TILE_SPAN / 2), SQUARES = 32, positions = [], uvs = [], indices = [];
+      for (let row = 0; row <= SQUARES; row++) for (let col = 0; col <= SQUARES; col++) {
+        const direction = n.clone().addScaledVector(east, (col / SQUARES * 2 - 1) * halfWidth).addScaledVector(north, (row / SQUARES * 2 - 1) * halfWidth).normalize();
+        positions.push(direction.x * 1.0004, direction.y * 1.0004, direction.z * 1.0004);     // just above the planet's surface
+        uvs.push(col / SQUARES, row / SQUARES);
       }
-      for (let j = 0; j < M; j++) for (let i = 0; i < M; i++) { const a = j * (M + 1) + i; idx.push(a, a + 1, a + M + 1, a + 1, a + M + 2, a + M + 1); }
-      const g = new T.BufferGeometry(); g.setAttribute('position', new T.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new T.Float32BufferAttribute(uv, 2)); g.setIndex(idx); g.computeVertexNormals();
-      return g;
+      for (let row = 0; row < SQUARES; row++) for (let col = 0; col < SQUARES; col++) {
+        const corner = row * (SQUARES + 1) + col;
+        indices.push(corner, corner + 1, corner + SQUARES + 1, corner + 1, corner + SQUARES + 2, corner + SQUARES + 1);
+      }
+      const geometry = new T.BufferGeometry();
+      geometry.setAttribute('position', new T.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute('uv', new T.Float32BufferAttribute(uvs, 2));
+      geometry.setIndex(indices);
+      geometry.computeVertexNormals();
+      return geometry;
     }
-    function dropTile(t) { t.dead = true; if (t.mesh) { planetGroup.remove(t.mesh); t.mesh.geometry.dispose(); t.mesh.material.map.dispose(); t.mesh.material.dispose(); } tiles.delete(t.id); }
-    function gotTile(wk, m) {
-      const job = wk.busy; wk.busy = null; if (!job) return;
+    // Throws a tile away and frees its graphics memory.
+    function dropTile(tile) {
+      tile.dead = true;
+      if (tile.mesh) {
+        planetGroup.remove(tile.mesh);
+        tile.mesh.geometry.dispose();
+        tile.mesh.material.map.dispose();
+        tile.mesh.material.dispose();
+      }
+      tiles.delete(tile.id);
+    }
+    // A worker has finished painting a tile (message `message`): put the picture on the tile, creating its mesh the first time.
+    function gotTile(worker, message) {
+      const job = worker.busy;
+      worker.busy = null;
+      if (!job) return;
       job.t.pending = 0;
-      const t = job.t; if (t.dead) return;
-      const tex = new T.DataTexture(new Uint8Array(m.data), m.res, m.res, T.RGBAFormat);
-      tex.minFilter = T.LinearMipmapLinearFilter; tex.magFilter = T.LinearFilter; tex.generateMipmaps = true; tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy()); tex.needsUpdate = true;
-      tex.onUpdate = () => { tex.image.data = null; };               // the picture now lives on the graphics card
-      if (t.mesh) { t.mesh.material.map.dispose(); t.mesh.material.map = tex; t.mesh.material.needsUpdate = true; }
-      else {
-        t.mesh = new T.Mesh(tileMesh(t.n), new T.MeshLambertMaterial({ map: tex, transparent: true, depthWrite: false, opacity: 0 }));
-        t.mesh.renderOrder = 1; t.mesh.frustumCulled = false; planetGroup.add(t.mesh); t.fade = 0;
+      const tile = job.t;
+      if (tile.dead) return;
+      const texture = new T.DataTexture(new Uint8Array(message.data), message.res, message.res, T.RGBAFormat);
+      texture.minFilter = T.LinearMipmapLinearFilter;
+      texture.magFilter = T.LinearFilter;
+      texture.generateMipmaps = true;
+      texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+      texture.needsUpdate = true;
+      texture.onUpdate = () => { texture.image.data = null; };               // the picture now lives on the graphics card
+      if (tile.mesh) {                                                        // upgrading an existing tile to a sharper picture
+        tile.mesh.material.map.dispose();
+        tile.mesh.material.map = texture;
+        tile.mesh.material.needsUpdate = true;
+      } else {
+        tile.mesh = new T.Mesh(tileMesh(tile.n), new T.MeshLambertMaterial({ map: texture, transparent: true, depthWrite: false, opacity: 0 }));
+        tile.mesh.renderOrder = 1;
+        tile.mesh.frustumCulled = false;
+        planetGroup.add(tile.mesh);
+        tile.fade = 0;
       }
-      t.res = m.res;
+      tile.res = message.res;
     }
-    workers.forEach(wk => { wk.onmessage = e => gotTile(wk, e.data); wk.onerror = () => { wk.busy = null; }; });
-    let acc = 0, zoomF = 0;
+    workers.forEach(worker => { worker.onmessage = event => gotTile(worker, event.data); worker.onerror = () => { worker.busy = null; }; });
+    let sinceLastCheck = 0, zoomFactor = 0;      // seconds since tiles were last chosen; 0..1 how zoomed in we are (1 = fully showing tiles)
     tickers.push((tm, dt) => {
-      const dist = baseDist, D = Math.max(0.05, dist - 1);
-      zoomF = dist < 1.62 ? 1 : dist > 1.8 ? 0 : 1 - (dist - 1.62) / 0.18;
-      for (const t of tiles.values()) { if (!t.mesh) continue; t.fade = Math.min(1, t.fade + dt * 2); t.mesh.material.opacity = t.fade * zoomF; t.mesh.visible = t.mesh.material.opacity > 0.01; }
-      acc += dt; if (acc < 0.3) return; acc = 0;
-      if (dist > 1.8) return;
-      const c = viewDir, tf = Math.tan(camera.fov * Math.PI / 360);
-      const pxRad = (innerHeight / 2) / (tf * D), reach = Math.min(Math.acos(Math.min(1, 1 / dist)), D * tf * Math.max(1, camera.aspect) * 1.2) * (1 + tiltCur * 0.7) + 0.15;
-      const list = centres.map((n, i) => ({ i, n, ang: Math.acos(Math.min(1, n.dot(c))) })).filter(o => o.ang < reach).sort((a, b) => a.ang - b.ang).slice(0, TILE_MAX);
-      const need = new Set(list.map(o => o.i));
-      for (const t of [...tiles.values()]) if (!need.has(t.id) && tiles.size > TILE_MAX && !t.pending) dropTile(t);
-      for (const o of list) {
-        const wr = pxRad > 2300 && o.ang < 0.22 ? 2048 : 1024; let t = tiles.get(o.i);
-        if (!t) { t = { id: o.i, n: o.n, res: 0, pending: 0, fade: 0, mesh: null }; tiles.set(o.i, t); }
-        if (t.res < wr && !t.pending) want.push({ t, wr, ang: o.ang });
+      const distance = baseDist, heightAboveGround = Math.max(0.05, distance - 1);
+      zoomFactor = distance < 1.62 ? 1 : distance > 1.8 ? 0 : 1 - (distance - 1.62) / 0.18;     // fade the tiles in between distance 1.8 and 1.62
+      for (const tile of tiles.values()) {
+        if (!tile.mesh) continue;
+        tile.fade = Math.min(1, tile.fade + dt * 2);
+        tile.mesh.material.opacity = tile.fade * zoomFactor;
+        tile.mesh.visible = tile.mesh.material.opacity > 0.01;
       }
-      want.sort((a, b) => a.ang - b.ang);
-      for (const wk of workers) if (!wk.busy && want.length) { const j = want.shift(); if (j.t.pending || j.t.res >= j.wr) continue; j.t.pending = j.wr; wk.busy = { id: j.t.id, t: j.t }; wk.postMessage({ seed: SEED, n: [j.t.n.x, j.t.n.y, j.t.n.z], span: TILE_SPAN, res: j.wr }); }
-      want.length = 0;
+      sinceLastCheck += dt;
+      if (sinceLastCheck < 0.3) return;                                      // choose tiles only about three times a second
+      sinceLastCheck = 0;
+      if (distance > 1.8) return;                                            // too far away to need tiles
+      const viewCentre = viewDir, tanHalfFov = Math.tan(camera.fov * Math.PI / 360);
+      const pixelsPerRadian = (innerHeight / 2) / (tanHalfFov * heightAboveGround);
+      // How far round from the view centre tiles are wanted: the visible cap, or what fits on screen, plus a margin (more when tilted).
+      const reach = Math.min(Math.acos(Math.min(1, 1 / distance)), heightAboveGround * tanHalfFov * Math.max(1, camera.aspect) * 1.2) * (1 + tiltCur * 0.7) + 0.15;
+      // The TILE_MAX tiles nearest the view centre that are within reach.
+      const nearby = centres.map((n, i) => ({ i, n, ang: Math.acos(Math.min(1, n.dot(viewCentre))) })).filter(o => o.ang < reach).sort((a, b) => a.ang - b.ang).slice(0, TILE_MAX);
+      const needed = new Set(nearby.map(o => o.i));
+      for (const tile of [...tiles.values()]) if (!needed.has(tile.id) && tiles.size > TILE_MAX && !tile.pending) dropTile(tile);   // forget far-away tiles once there are too many
+      for (const o of nearby) {
+        const wantedResolution = pixelsPerRadian > 2300 && o.ang < 0.22 ? 2048 : 1024;     // very close up, the central tiles get double resolution
+        let tile = tiles.get(o.i);
+        if (!tile) { tile = { id: o.i, n: o.n, res: 0, pending: 0, fade: 0, mesh: null }; tiles.set(o.i, tile); }
+        if (tile.res < wantedResolution && !tile.pending) wanted.push({ t: tile, wr: wantedResolution, ang: o.ang });
+      }
+      wanted.sort((a, b) => a.ang - b.ang);                                  // nearest first
+      for (const worker of workers) {
+        if (!worker.busy && wanted.length) {
+          const job = wanted.shift();
+          if (job.t.pending || job.t.res >= job.wr) continue;
+          job.t.pending = job.wr;
+          worker.busy = { id: job.t.id, t: job.t };
+          worker.postMessage({ seed: SEED, n: [job.t.n.x, job.t.n.y, job.t.n.z], span: TILE_SPAN, res: job.wr });
+        }
+      }
+      wanted.length = 0;
     });
-    window.__tiles = tiles;
+    window.__tiles = tiles;      // for debugging
   } catch (e) { console.warn('detail tiles unavailable', e); }
+
+  // What the rest of the page (cards, selection, input) is allowed to see of the world.
   world = { P, cities, volcanoes, storms, boats, selectBoat, clearBoat, boatSelected: () => !!selectedBoat };
+  // Debugging: add ?debug to the address to reach the world from the browser console as window.__np.
   if (new URLSearchParams(location.search).has('debug')) window.__np = { invade: () => { startInvasion(); return invasion; }, setAge: a => setAge(a), launch, satellites, countries, camera, controls, scene, planetGroup, boats, storms, volcanoes, cities, rail, T, tilted: () => tiltedMat };
-  const q = new URLSearchParams(location.search).get('go');   // e.g. ?go=volcano | volcano2 | storm | storm2 | city3 | boat2
-  if (q) setTimeout(() => { window.__noSpin = true;
-    if (q.startsWith('boat')) { const b = boats[+q.slice(4)]; selectBoat(b); camera.position.copy(b.n).multiplyScalar(+(new URLSearchParams(location.search).get('d') || 1.7)); controls.update(); if (focus) focus.ease = 0; return; }
-    const tgt = q === 'volcano' ? volcanoes[0] : q === 'volcano2' ? volcanoes[1] : q === 'volcano3' ? volcanoes[2] : q === 'storm' ? storms[0] : q === 'storm2' ? storms[1] : cities[+q.slice(4)];
-    camera.position.copy(tgt.n).multiplyScalar(+(new URLSearchParams(location.search).get('d') || 1.8)); controls.update(); releaseFocus();
-    if (tgt.erupt) tgt.erupt(); else if (tgt.zap) tgt.zap(); }, 200);
+  // Debugging: ?go=volcano | volcano2 | volcano3 | storm | storm2 | city3 | boat2 jumps straight to that thing (and ?d= sets the camera distance).
+  const goTarget = new URLSearchParams(location.search).get('go');
+  if (goTarget) setTimeout(() => {
+    window.__noSpin = true;
+    if (goTarget.startsWith('boat')) {
+      const boat = boats[+goTarget.slice(4)];
+      selectBoat(boat);
+      camera.position.copy(boat.n).multiplyScalar(+(new URLSearchParams(location.search).get('d') || 1.7));
+      controls.update();
+      if (focus) focus.ease = 0;
+      return;
+    }
+    const target = goTarget === 'volcano' ? volcanoes[0] : goTarget === 'volcano2' ? volcanoes[1] : goTarget === 'volcano3' ? volcanoes[2] : goTarget === 'storm' ? storms[0] : goTarget === 'storm2' ? storms[1] : cities[+goTarget.slice(4)];
+    camera.position.copy(target.n).multiplyScalar(+(new URLSearchParams(location.search).get('d') || 1.8));
+    controls.update();
+    releaseFocus();
+    if (target.erupt) target.erupt(); else if (target.zap) target.zap();
+  }, 200);
   console.log('Nathaniel Planet built', { cities: cities.map(c => [c.name, c.biome]), mountains: mtnN.length, volcanoes: volcanoes.length, storms: storms.length, boats: boats.length, whales: whales.length, trains: boats.filter(b => b.rail).length, railEdges: rail.edges.length });
-  planetGroup.userData.planet = planet; pickables.push(planet);
+  planetGroup.userData.planet = planet;
+  pickables.push(planet);
   planet.userData = { kind: 'planet' };
 }
 
 
 /* ---------- labels ---------- */
+// Adds a floating name label (an HTML element) for a place at direction `n`, `r` from the planet's centre. `cls` is an
+// extra CSS class (colour/style), onClick runs when it is tapped. Returns { el, pos, n }; updateLabels() keeps it in place.
 function addLabel(text, n, r, cls, onClick) {
-  const el = document.createElement('div');
-  el.className = 'label ' + cls; el.textContent = text;
-  el.addEventListener('click', onClick);
-  document.body.appendChild(el);
-  const L = { el, pos: n.clone().multiplyScalar(r), n: n.clone() }; labels.push(L); return L;
+  const element = document.createElement('div');
+  element.className = 'label ' + cls;
+  element.textContent = text;
+  element.addEventListener('click', onClick);
+  document.body.appendChild(element);
+  const label = { el: element, pos: n.clone().multiplyScalar(r), n: n.clone() };
+  labels.push(label);
+  return label;
 }
-const _v = new T.Vector3();
+const _v = new T.Vector3();   // scratch vector for updateLabels
+// Every frame: moves each label to where its place appears on screen, and fades it out when the place is on the far side
+// of the planet, or the camera is too far away.
 function updateLabels() {
-  const w = innerWidth, h = innerHeight, cp = camera.position, d = cp.length();
-  for (const L of labels) {
-    const facing = L.n.dot(cp) - 1;                 // >0: on the visible hemisphere
-    _v.copy(L.pos).project(camera);
-    const show = facing > 0.04 && d < 4.4 && _v.z < 1;
-    L.el.style.opacity = show ? Math.min(1, facing * 6) : 0;
-    L.el.style.pointerEvents = show ? 'auto' : 'none';
-    L.el.style.transform = `translate(${(_v.x * .5 + .5) * w}px,${(-_v.y * .5 + .5) * h}px) translate(-50%,-135%)`;
+  const screenWidth = innerWidth, screenHeight = innerHeight, cameraPosition = camera.position, cameraDistance = cameraPosition.length();
+  for (const label of labels) {
+    const facing = label.n.dot(cameraPosition) - 1;                 // >0: on the visible hemisphere
+    _v.copy(label.pos).project(camera);
+    const show = facing > 0.04 && cameraDistance < 4.4 && _v.z < 1;
+    label.el.style.opacity = show ? Math.min(1, facing * 6) : 0;
+    label.el.style.pointerEvents = show ? 'auto' : 'none';
+    label.el.style.transform = `translate(${(_v.x * .5 + .5) * screenWidth}px,${(-_v.y * .5 + .5) * screenHeight}px) translate(-50%,-135%)`;
   }
 }
 
