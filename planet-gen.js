@@ -2,259 +2,428 @@
 (function (root) {
   'use strict';
 
-  function mulberry32(a) {
+  /* Small seeded random number generator (mulberry32). Returns a function that gives
+     a new number between 0 and 1 each time it is called; the same seed gives the same sequence. */
+  function mulberry32(seed) {
     return function () {
-      a |= 0; a = (a + 0x6D2B79F5) | 0;
-      let t = Math.imul(a ^ (a >>> 15), 1 | a);
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      seed |= 0;
+      seed = (seed + 0x6D2B79F5) | 0;
+      let mixed = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed;
+      return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
     };
   }
 
+  /* Builds smooth 3D value noise for a seed. Returns { noise, fbm }:
+     noise(x, y, z) is a single smooth layer of noise between 0 and 1, and
+     fbm(x, y, z, octaves) stacks several layers of finer and finer detail on top of each other. */
   function makeNoise(seed) {
-    function h(x, y, z) {
-      let n = (Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(z, 1274126177) + seed) | 0;
+    // A repeatable pseudo-random value (0..1) for each whole-number grid corner.
+    function cornerValue(ix, iy, iz) {
+      let n = (Math.imul(ix, 374761393) + Math.imul(iy, 668265263) + Math.imul(iz, 1274126177) + seed) | 0;
       n = Math.imul(n ^ (n >>> 13), 1274126177);
       return ((n ^ (n >>> 16)) >>> 0) / 4294967295;
     }
+
+    // Eases a 0..1 fraction so blending between corners has no visible grid lines.
     const fade = t => t * t * (3 - 2 * t);
+
+    // Smooth noise: blends the eight corners of the grid cell that contains the point.
     function noise(x, y, z) {
-      const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
-      const xf = fade(x - xi), yf = fade(y - yi), zf = fade(z - zi);
-      const l = (a, b, t) => a + (b - a) * t;
-      return l(
-        l(l(h(xi, yi, zi), h(xi + 1, yi, zi), xf), l(h(xi, yi + 1, zi), h(xi + 1, yi + 1, zi), xf), yf),
-        l(l(h(xi, yi, zi + 1), h(xi + 1, yi, zi + 1), xf), l(h(xi, yi + 1, zi + 1), h(xi + 1, yi + 1, zi + 1), xf), yf),
-        zf);
+      const cellX = Math.floor(x), cellY = Math.floor(y), cellZ = Math.floor(z);
+      const fracX = fade(x - cellX), fracY = fade(y - cellY), fracZ = fade(z - cellZ);
+      const lerp = (from, to, t) => from + (to - from) * t;
+      return lerp(
+        lerp(
+          lerp(cornerValue(cellX, cellY, cellZ),         cornerValue(cellX + 1, cellY, cellZ),         fracX),
+          lerp(cornerValue(cellX, cellY + 1, cellZ),     cornerValue(cellX + 1, cellY + 1, cellZ),     fracX),
+          fracY),
+        lerp(
+          lerp(cornerValue(cellX, cellY, cellZ + 1),     cornerValue(cellX + 1, cellY, cellZ + 1),     fracX),
+          lerp(cornerValue(cellX, cellY + 1, cellZ + 1), cornerValue(cellX + 1, cellY + 1, cellZ + 1), fracX),
+          fracY),
+        fracZ);
     }
-    function fbm(x, y, z, oct) {
-      let s = 0, a = 1, f = 1, n = 0;
-      for (let i = 0; i < oct; i++) { s += a * noise(x * f, y * f, z * f); n += a; a *= 0.5; f *= 2.03; }
-      return s / n;
+
+    // Fractal noise: each octave has half the strength and about twice the detail of the last.
+    function fbm(x, y, z, octaves) {
+      let sum = 0, amplitude = 1, frequency = 1, totalAmplitude = 0;
+      for (let i = 0; i < octaves; i++) {
+        sum += amplitude * noise(x * frequency, y * frequency, z * frequency);
+        totalAmplitude += amplitude;
+        amplitude *= 0.5;
+        frequency *= 2.03;
+      }
+      return sum / totalAmplitude;
     }
+
     return { noise, fbm };
   }
 
-  const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  // Small maths helpers.
+  const smooth = (edgeLow, edgeHigh, x) => {   // 0 below edgeLow, 1 above edgeHigh, smooth ramp between
+    const t = Math.min(1, Math.max(0, (x - edgeLow) / (edgeHigh - edgeLow)));
+    return t * t * (3 - 2 * t);
+  };
   const clamp01 = x => Math.min(1, Math.max(0, x));
-  const hex = s => [parseInt(s.slice(1, 3), 16), parseInt(s.slice(3, 5), 16), parseInt(s.slice(5, 7), 16)];
-  const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+  const hex = css => [parseInt(css.slice(1, 3), 16), parseInt(css.slice(3, 5), 16), parseInt(css.slice(5, 7), 16)];   // '#rrggbb' -> [r, g, b]
+  const mix = (colorA, colorB, t) => [
+    colorA[0] + (colorB[0] - colorA[0]) * t,
+    colorA[1] + (colorB[1] - colorA[1]) * t,
+    colorA[2] + (colorB[2] - colorA[2]) * t,
+  ];
 
-  const LAND_FRACTION = 0.47;
+  const LAND_FRACTION = 0.47;   // roughly this share of the planet is land
 
+  /* Creates the whole planet for a seed: land shape, sea level, biomes and the painted texture.
+     Directions on the planet are unit vectors [x, y, z] with y pointing at the north pole. */
   function createPlanet(seed) {
     seed = seed | 0;
-    const N = makeNoise(seed);
-    const off = [seed * 0.0013 % 50, seed * 0.0029 % 50, seed * 0.0007 % 50];
+    const noiseGen = makeNoise(seed);
+    const seedOffset = [seed * 0.0013 % 50, seed * 0.0029 % 50, seed * 0.0007 % 50];
 
+    // The raw height field. Higher number = higher ground. Sea level is chosen further down.
     function rawHeight(x, y, z) {
       // gentle domain warp makes blobby, hand-drawn coastlines
-      const wx = N.noise(x * 2.2 + 7, y * 2.2, z * 2.2) - 0.5;
-      const wy = N.noise(x * 2.2, y * 2.2 + 13, z * 2.2) - 0.5;
-      const wz = N.noise(x * 2.2, y * 2.2, z * 2.2 + 29) - 0.5;
-      const k = 0.5;
-      let f = N.fbm(x * 1.35 + off[0] + wx * k, y * 1.35 + off[1] + wy * k, z * 1.35 + off[2] + wz * k, 5);
-      f += 0.24 * smooth(0.82, 0.98, Math.abs(y)); // continents at the poles
+      const warpX = noiseGen.noise(x * 2.2 + 7, y * 2.2, z * 2.2) - 0.5;
+      const warpY = noiseGen.noise(x * 2.2, y * 2.2 + 13, z * 2.2) - 0.5;
+      const warpZ = noiseGen.noise(x * 2.2, y * 2.2, z * 2.2 + 29) - 0.5;
+      const warpStrength = 0.5;
+      let height = noiseGen.fbm(
+        x * 1.35 + seedOffset[0] + warpX * warpStrength,
+        y * 1.35 + seedOffset[1] + warpY * warpStrength,
+        z * 1.35 + seedOffset[2] + warpZ * warpStrength,
+        5);
+      height += 0.24 * smooth(0.82, 0.98, Math.abs(y)); // continents at the poles
       // fine octaves: bays, capes and little coves (small amplitude, the big shapes stay put)
-      f += 0.05 * (N.noise(x * 11 + 3, y * 11, z * 11 + 5) - 0.5) + 0.022 * (N.noise(x * 26, y * 26 + 9, z * 26 + 2) - 0.5);
-      return f;
+      height += 0.05 * (noiseGen.noise(x * 11 + 3, y * 11, z * 11 + 5) - 0.5)
+              + 0.022 * (noiseGen.noise(x * 26, y * 26 + 9, z * 26 + 2) - 0.5);
+      return height;
     }
 
     // Pick the sea level so land covers a fixed fraction of the planet
-    const rnd = mulberry32(seed ^ 0x9e3779b9);
-    const samples = [];
+    const sampleRandom = mulberry32(seed ^ 0x9e3779b9);
+    const heightSamples = [];
     for (let i = 0; i < 24000; i++) {
-      const z = rnd() * 2 - 1, t = rnd() * Math.PI * 2, r = Math.sqrt(1 - z * z);
-      samples.push(rawHeight(r * Math.cos(t), z, r * Math.sin(t)));
+      const z = sampleRandom() * 2 - 1, angle = sampleRandom() * Math.PI * 2, ringRadius = Math.sqrt(1 - z * z);
+      heightSamples.push(rawHeight(ringRadius * Math.cos(angle), z, ringRadius * Math.sin(angle)));
     }
-    samples.sort((a, b) => a - b);
-    const sea = samples[Math.floor(samples.length * (1 - LAND_FRACTION))];
-    const lowest = samples[Math.floor(samples.length * 0.01)];
-    const highest = samples[Math.floor(samples.length * 0.995)];
+    heightSamples.sort((a, b) => a - b);
+    const sea = heightSamples[Math.floor(heightSamples.length * (1 - LAND_FRACTION))];   // heights above this are land
+    const lowest = heightSamples[Math.floor(heightSamples.length * 0.01)];               // the deepest sea floor
+    const highest = heightSamples[Math.floor(heightSamples.length * 0.995)];             // the highest peaks
 
     const heightAt = (x, y, z) => rawHeight(x, y, z);
-    const isLandH = h => h > sea;
 
-    function iceEdge(x, y, z) { return 0.77 + 0.05 * (N.noise(x * 3 + 40, y * 3, z * 3) - 0.5) * 2; }
-    function desertEdge(x, y, z) { return 0.30 + 0.10 * (N.noise(x * 2.5, y * 2.5 + 60, z * 2.5) - 0.5) * 2; }
+    // Latitude (|y|) beyond which the ground is ice; wobbles a little so the edge is not a straight line.
+    function iceEdge(x, y, z) { return 0.77 + 0.05 * (noiseGen.noise(x * 3 + 40, y * 3, z * 3) - 0.5) * 2; }
+    // Latitude (|y|) below which the ground is desert.
+    function desertEdge(x, y, z) { return 0.30 + 0.10 * (noiseGen.noise(x * 2.5, y * 2.5 + 60, z * 2.5) - 0.5) * 2; }
 
-    // 'ice' | 'desert' | 'savanna' | 'green'
+    // Which biome a point is in, by distance from the equator: 'ice' | 'desert' | 'savanna' | 'green'
     function biomeAt(x, y, z) {
-      const ay = Math.abs(y);
-      if (ay > iceEdge(x, y, z)) return 'ice';
-      const de = desertEdge(x, y, z);
-      if (ay < de) return 'desert';
-      if (ay < de + 0.10) return 'savanna';
+      const absLatitude = Math.abs(y);
+      if (absLatitude > iceEdge(x, y, z)) return 'ice';
+      const desertLimit = desertEdge(x, y, z);
+      if (absLatitude < desertLimit) return 'desert';
+      if (absLatitude < desertLimit + 0.10) return 'savanna';
       return 'green';
     }
 
-    const PAL = {
+    // Three land colours per biome: low ground, middle height, high ground.
+    const BIOME_PALETTE = {
       ice: ['#f3fbff', '#dff3fb', '#c4e6f5'],
       desert: ['#f6d77f', '#eec45f', '#e0aa45'],
       savanna: ['#b9dd5a', '#9fcf4c', '#86be42'],
       green: ['#73d24f', '#58c244', '#3fa83f'],
     };
-    for (const k in PAL) PAL[k] = PAL[k].map(hex);
+    for (const biome in BIOME_PALETTE) BIOME_PALETTE[biome] = BIOME_PALETTE[biome].map(hex);
+
+    // Sea colour from shallow (0) to deepest (1), as [depth, colour] stops.
     const SEA_STOPS = [
       [0.00, hex('#5fe3e0')], [0.10, hex('#35b9ee')], [0.30, hex('#2a6fe0')],
       [0.55, hex('#4b2bb0')], [0.80, hex('#2a0f6a')], [1.00, hex('#0b0322')],
     ];
-    function seaColor(dn) {
+
+    // Blends between the sea stops to give the colour at a depth between 0 and 1.
+    function seaColor(depth01) {
       for (let i = 1; i < SEA_STOPS.length; i++) {
-        if (dn <= SEA_STOPS[i][0]) {
-          const [a, ca] = SEA_STOPS[i - 1], [b, cb] = SEA_STOPS[i];
-          return mix(ca, cb, (dn - a) / (b - a));
+        if (depth01 <= SEA_STOPS[i][0]) {
+          const [depthBefore, colorBefore] = SEA_STOPS[i - 1], [depthAfter, colorAfter] = SEA_STOPS[i];
+          return mix(colorBefore, colorAfter, (depth01 - depthBefore) / (depthAfter - depthBefore));
         }
       }
       return SEA_STOPS[SEA_STOPS.length - 1][1];
     }
-    const seaDepth01 = h => Math.pow(clamp01((sea - h) / (sea - lowest)), 0.6);
 
+    // How deep the sea is at a height: 0 at the shoreline, 1 at the deepest floor.
+    const seaDepth01 = height => Math.pow(clamp01((sea - height) / (sea - lowest)), 0.6);
+
+    // Converts a position on the flat texture (u, v both 0..1) to a direction on the sphere.
     function dirFromUV(u, v) { // matches THREE.SphereGeometry
-      const phi = u * Math.PI * 2, th = v * Math.PI;
-      return [-Math.cos(phi) * Math.sin(th), Math.cos(th), Math.sin(phi) * Math.sin(th)];
+      const longitude = u * Math.PI * 2, colatitude = v * Math.PI;
+      return [-Math.cos(longitude) * Math.sin(colatitude), Math.cos(colatitude), Math.sin(longitude) * Math.sin(colatitude)];
     }
 
     /* Cartoon surface texture.
        The height field is evaluated on a coarse grid (it is smooth) and bilinearly upsampled, then
        coastlines are anti-aliased with a distance field: smooth ink outline, foam and ripple bands.
        Also returns `mask`: 255 on open water where animated waves may be drawn. */
-    function buildTexture(W, H) {
-      const Bw = Math.min(W, 2048), Bh = Bw >> 1, S = W / Bw, K = W / 2048;
-      const sm = smooth;
-      // trig tables
-      const cB = new Float32Array(Bw), sB = new Float32Array(Bw), cTB = new Float32Array(Bh), sTB = new Float32Array(Bh);
-      for (let i = 0; i < Bw; i++) { const p = (i + 0.5) / Bw * Math.PI * 2; cB[i] = Math.cos(p); sB[i] = Math.sin(p); }
-      for (let j = 0; j < Bh; j++) { const t = (j + 0.5) / Bh * Math.PI; cTB[j] = Math.cos(t); sTB[j] = Math.sin(t); }
-      const hB = new Float32Array(Bw * Bh);
-      for (let j = 0; j < Bh; j++) for (let i = 0; i < Bw; i++)
-        hB[j * Bw + i] = rawHeight(-cB[i] * sTB[j], cTB[j], sB[i] * sTB[j]);
-      // a softened copy of the height field for sea depth (keeps the deep-water bands calm)
-      const hS = new Float32Array(Bw * Bh), tmpS = new Float32Array(Bw * Bh), RB = 3;
-      for (let j = 0; j < Bh; j++) for (let i = 0; i < Bw; i++) { let a = 0; for (let d = -RB; d <= RB; d++) a += hB[j * Bw + (i + d + Bw) % Bw]; tmpS[j * Bw + i] = a / (2 * RB + 1); }
-      for (let j = 0; j < Bh; j++) for (let i = 0; i < Bw; i++) { let a = 0; for (let d = -RB; d <= RB; d++) a += tmpS[Math.min(Bh - 1, Math.max(0, j + d)) * Bw + i]; hS[j * Bw + i] = a / (2 * RB + 1); }
-      // smooth biome edges on a tiny grid
-      const Ew = 512, Eh = 256, iceG = new Float32Array(Ew * Eh), desG = new Float32Array(Ew * Eh);
-      for (let j = 0; j < Eh; j++) for (let i = 0; i < Ew; i++) {
-        const p = (i + 0.5) / Ew * Math.PI * 2, t = (j + 0.5) / Eh * Math.PI;
-        const x = -Math.cos(p) * Math.sin(t), y = Math.cos(t), z = Math.sin(p) * Math.sin(t);
-        iceG[j * Ew + i] = iceEdge(x, y, z); desG[j * Ew + i] = desertEdge(x, y, z);
+    function buildTexture(width, height) {
+      const coarseWidth = Math.min(width, 2048), coarseHeight = coarseWidth >> 1;
+      const coarseScale = width / coarseWidth;       // output pixels per coarse-grid cell
+      const detailScale = width / 2048;              // scales pixel-sized details with the texture size
+      const smoothstep = smooth;
+
+      // Pre-computed sines and cosines for each column and row of the coarse grid.
+      const cosLongCoarse = new Float32Array(coarseWidth), sinLongCoarse = new Float32Array(coarseWidth);
+      const cosLatCoarse = new Float32Array(coarseHeight), sinLatCoarse = new Float32Array(coarseHeight);
+      for (let col = 0; col < coarseWidth; col++) {
+        const longitude = (col + 0.5) / coarseWidth * Math.PI * 2;
+        cosLongCoarse[col] = Math.cos(longitude);
+        sinLongCoarse[col] = Math.sin(longitude);
       }
-      const edge = (G, i, j) => {   // bilinear lookup from the tiny grid at hi-res pixel (i, j)
-        const fx = (i + 0.5) / W * Ew - 0.5, fy = (j + 0.5) / H * Eh - 0.5;
-        const x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
-        const xa = (x0 + Ew) % Ew, xb = (x0 + 1 + Ew) % Ew, ya = Math.min(Eh - 1, Math.max(0, y0)), yb = Math.min(Eh - 1, Math.max(0, y0 + 1));
-        return (G[ya * Ew + xa] * (1 - tx) + G[ya * Ew + xb] * tx) * (1 - ty) + (G[yb * Ew + xa] * (1 - tx) + G[yb * Ew + xb] * tx) * ty;
+      for (let row = 0; row < coarseHeight; row++) {
+        const colatitude = (row + 0.5) / coarseHeight * Math.PI;
+        cosLatCoarse[row] = Math.cos(colatitude);
+        sinLatCoarse[row] = Math.sin(colatitude);
+      }
+
+      // The height field sampled on the coarse grid.
+      const coarseHeights = new Float32Array(coarseWidth * coarseHeight);
+      for (let row = 0; row < coarseHeight; row++) {
+        for (let col = 0; col < coarseWidth; col++) {
+          coarseHeights[row * coarseWidth + col] = rawHeight(
+            -cosLongCoarse[col] * sinLatCoarse[row], cosLatCoarse[row], sinLongCoarse[col] * sinLatCoarse[row]);
+        }
+      }
+
+      // A softened copy of the height field for sea depth (keeps the deep-water bands calm).
+      // Done as two box blurs: first along each row (wrapping around the planet), then down each column.
+      const softHeights = new Float32Array(coarseWidth * coarseHeight);
+      const rowBlurred = new Float32Array(coarseWidth * coarseHeight);
+      const blurRadius = 3;
+      for (let row = 0; row < coarseHeight; row++) {
+        for (let col = 0; col < coarseWidth; col++) {
+          let total = 0;
+          for (let d = -blurRadius; d <= blurRadius; d++) total += coarseHeights[row * coarseWidth + (col + d + coarseWidth) % coarseWidth];
+          rowBlurred[row * coarseWidth + col] = total / (2 * blurRadius + 1);
+        }
+      }
+      for (let row = 0; row < coarseHeight; row++) {
+        for (let col = 0; col < coarseWidth; col++) {
+          let total = 0;
+          for (let d = -blurRadius; d <= blurRadius; d++) {
+            total += rowBlurred[Math.min(coarseHeight - 1, Math.max(0, row + d)) * coarseWidth + col];
+          }
+          softHeights[row * coarseWidth + col] = total / (2 * blurRadius + 1);
+        }
+      }
+
+      // Smooth biome edges, sampled on a tiny grid and interpolated up to full size later.
+      const edgeWidth = 512, edgeHeight = 256;
+      const iceGrid = new Float32Array(edgeWidth * edgeHeight), desertGrid = new Float32Array(edgeWidth * edgeHeight);
+      for (let row = 0; row < edgeHeight; row++) {
+        for (let col = 0; col < edgeWidth; col++) {
+          const longitude = (col + 0.5) / edgeWidth * Math.PI * 2, colatitude = (row + 0.5) / edgeHeight * Math.PI;
+          const x = -Math.cos(longitude) * Math.sin(colatitude), y = Math.cos(colatitude), z = Math.sin(longitude) * Math.sin(colatitude);
+          iceGrid[row * edgeWidth + col] = iceEdge(x, y, z);
+          desertGrid[row * edgeWidth + col] = desertEdge(x, y, z);
+        }
+      }
+
+      // Bilinear lookup from the tiny edge grid at full-size pixel (px, py).
+      const edgeAt = (grid, px, py) => {
+        const gridX = (px + 0.5) / width * edgeWidth - 0.5, gridY = (py + 0.5) / height * edgeHeight - 0.5;
+        const x0 = Math.floor(gridX), y0 = Math.floor(gridY), fracX = gridX - x0, fracY = gridY - y0;
+        const colA = (x0 + edgeWidth) % edgeWidth, colB = (x0 + 1 + edgeWidth) % edgeWidth;
+        const rowA = Math.min(edgeHeight - 1, Math.max(0, y0)), rowB = Math.min(edgeHeight - 1, Math.max(0, y0 + 1));
+        return (grid[rowA * edgeWidth + colA] * (1 - fracX) + grid[rowA * edgeWidth + colB] * fracX) * (1 - fracY)
+             + (grid[rowB * edgeWidth + colA] * (1 - fracX) + grid[rowB * edgeWidth + colB] * fracX) * fracY;
       };
-      const out = { h: 0, g: 0, t: 0 };
-      const hAt = (i, j, A) => {    // height + gradient (per hi-res pixel) at hi-res pixel
-        A = A || hB;
-        const fx = (i + 0.5) / S - 0.5, fy = (j + 0.5) / S - 0.5;
-        const x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
-        const xa = (x0 + Bw) % Bw, xb = (x0 + 1 + Bw) % Bw, ya = Math.min(Bh - 1, Math.max(0, y0)), yb = Math.min(Bh - 1, Math.max(0, y0 + 1));
-        const h00 = A[ya * Bw + xa], h10 = A[ya * Bw + xb], h01 = A[yb * Bw + xa], h11 = A[yb * Bw + xb];
-        out.h = (h00 * (1 - tx) + h10 * tx) * (1 - ty) + (h01 * (1 - tx) + h11 * tx) * ty;
-        const gx = ((h10 - h00) * (1 - ty) + (h11 - h01) * ty) / S, gy = ((h01 - h00) * (1 - tx) + (h11 - h10) * tx) / S;
-        out.g = Math.max(1e-6, Math.hypot(gx, gy));
+
+      // Results of the last sampleHeight() call: the height, and the height gradient per full-size pixel.
+      const sampled = { height: 0, gradient: 0 };
+
+      // Bilinear height at full-size pixel (px, py), plus how steeply it changes there.
+      // Reads from `source` (the normal heights by default, or the softened copy).
+      const sampleHeight = (px, py, source) => {
+        source = source || coarseHeights;
+        const gridX = (px + 0.5) / coarseScale - 0.5, gridY = (py + 0.5) / coarseScale - 0.5;
+        const x0 = Math.floor(gridX), y0 = Math.floor(gridY), fracX = gridX - x0, fracY = gridY - y0;
+        const colA = (x0 + coarseWidth) % coarseWidth, colB = (x0 + 1 + coarseWidth) % coarseWidth;
+        const rowA = Math.min(coarseHeight - 1, Math.max(0, y0)), rowB = Math.min(coarseHeight - 1, Math.max(0, y0 + 1));
+        const h00 = source[rowA * coarseWidth + colA], h10 = source[rowA * coarseWidth + colB];
+        const h01 = source[rowB * coarseWidth + colA], h11 = source[rowB * coarseWidth + colB];
+        sampled.height = (h00 * (1 - fracX) + h10 * fracX) * (1 - fracY) + (h01 * (1 - fracX) + h11 * fracX) * fracY;
+        const slopeX = ((h10 - h00) * (1 - fracY) + (h11 - h01) * fracY) / coarseScale;
+        const slopeY = ((h01 - h00) * (1 - fracX) + (h11 - h10) * fracX) / coarseScale;
+        sampled.gradient = Math.max(1e-6, Math.hypot(slopeX, slopeY));
       };
+
       // pass 1: distance-to-coast seeds (sub-pixel), then a chamfer sweep. Fixed point, 1/16 px.
-      const INF = 65535, ud = new Uint16Array(W * H).fill(INF), land = new Uint8Array(W * H);
-      for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
-        hAt(i, j); const k = j * W + i, d = Math.abs(out.h - sea) / out.g;
-        land[k] = out.h > sea ? 1 : 0;
-        if (d < 1.8) ud[k] = Math.round(d * 16);
+      // coastDistance holds, for every pixel, how far it is from the nearest coastline (in 1/16 pixels).
+      const FAR = 65535;
+      const coastDistance = new Uint16Array(width * height).fill(FAR);
+      for (let row = 0; row < height; row++) {
+        for (let col = 0; col < width; col++) {
+          sampleHeight(col, row);
+          const index = row * width + col;
+          const distanceToCoast = Math.abs(sampled.height - sea) / sampled.gradient;
+          if (distanceToCoast < 1.8) coastDistance[index] = Math.round(distanceToCoast * 16);
+        }
       }
-      const relax = (k, v) => { if (v < ud[k]) ud[k] = v; };
+      // Two sweeps (top-left to bottom-right, then back) spread the distances outward from the coast.
       for (let pass = 0; pass < 2; pass++) {
-        for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
-          const k = j * W + i, l = j * W + (i + W - 1) % W; let v = ud[k];
-          v = Math.min(v, ud[l] + 16);
-          if (j > 0) { const u = k - W; v = Math.min(v, ud[u] + 16, ud[j * W - W + (i + W - 1) % W] + 23, ud[j * W - W + (i + 1) % W] + 23); }
-          ud[k] = Math.min(v, INF);
+        for (let row = 0; row < height; row++) {
+          for (let col = 0; col < width; col++) {
+            const index = row * width + col, left = row * width + (col + width - 1) % width;
+            let best = coastDistance[index];
+            best = Math.min(best, coastDistance[left] + 16);
+            if (row > 0) {
+              const above = index - width;
+              best = Math.min(best, coastDistance[above] + 16,
+                coastDistance[row * width - width + (col + width - 1) % width] + 23,
+                coastDistance[row * width - width + (col + 1) % width] + 23);
+            }
+            coastDistance[index] = Math.min(best, FAR);
+          }
         }
-        for (let j = H - 1; j >= 0; j--) for (let i = W - 1; i >= 0; i--) {
-          const k = j * W + i, r = j * W + (i + 1) % W; let v = ud[k];
-          v = Math.min(v, ud[r] + 16);
-          if (j < H - 1) { const d = k + W; v = Math.min(v, ud[d] + 16, ud[(j + 1) * W + (i + W - 1) % W] + 23, ud[(j + 1) * W + (i + 1) % W] + 23); }
-          ud[k] = Math.min(v, INF);
+        for (let row = height - 1; row >= 0; row--) {
+          for (let col = width - 1; col >= 0; col--) {
+            const index = row * width + col, right = row * width + (col + 1) % width;
+            let best = coastDistance[index];
+            best = Math.min(best, coastDistance[right] + 16);
+            if (row < height - 1) {
+              const below = index + width;
+              best = Math.min(best, coastDistance[below] + 16,
+                coastDistance[(row + 1) * width + (col + width - 1) % width] + 23,
+                coastDistance[(row + 1) * width + (col + 1) % width] + 23);
+            }
+            coastDistance[index] = Math.min(best, FAR);
+          }
         }
       }
+
       // pass 2: colour
-      const lut = []; for (let q = 0; q <= 1000; q++) lut.push(seaColor(q / 1000));
-      const INK = [18, 34, 70], FOAM = [236, 250, 255], ICESEA = hex('#e6f6ff');
-      const rel = h => clamp01((h - sea) / (highest - sea));
-      const cp = new Float32Array(W), sp = new Float32Array(W), ct = new Float32Array(H), st = new Float32Array(H);
-      for (let i = 0; i < W; i++) { const p = (i + 0.5) / W * Math.PI * 2; cp[i] = Math.cos(p); sp[i] = Math.sin(p); }
-      for (let j = 0; j < H; j++) { const t = (j + 0.5) / H * Math.PI; ct[j] = Math.cos(t); st[j] = Math.sin(t); }
-      const px = new Uint8ClampedArray(W * H * 4), mask = new Uint8Array(W * H);
-      const bandA = [0, 0, 0], bandB = [0, 0, 0], col = [0, 0, 0];
-      const bandMix = (p, t1, t2, o) => { for (let q = 0; q < 3; q++) { const m = p[0][q] + (p[1][q] - p[0][q]) * t1; o[q] = m + (p[2][q] - m) * t2; } };
-      const OW = 2.3 * K;           // outline half width in px
-      for (let j = 0; j < H; j++) {
-        const y = ct[j], ay = Math.abs(y);
-        for (let i = 0; i < W; i++) {
-          const k = j * W + i, u = ud[k] / 16;
-          hAt(i, j);
-          const h = out.h, isLand = h > sea;
-          let a = 255;
+      const seaColorTable = [];   // sea colours pre-computed in 1000 steps of depth
+      for (let step = 0; step <= 1000; step++) seaColorTable.push(seaColor(step / 1000));
+      const INK = [18, 34, 70], FOAM = [236, 250, 255], ICE_SEA = hex('#e6f6ff');
+      const relativeHeight = h => clamp01((h - sea) / (highest - sea));   // 0 at the coast, 1 at the highest peak
+
+      // Pre-computed sines and cosines per output column and row.
+      const cosLong = new Float32Array(width), sinLong = new Float32Array(width);
+      const cosLat = new Float32Array(height), sinLat = new Float32Array(height);
+      for (let col = 0; col < width; col++) {
+        const longitude = (col + 0.5) / width * Math.PI * 2;
+        cosLong[col] = Math.cos(longitude);
+        sinLong[col] = Math.sin(longitude);
+      }
+      for (let row = 0; row < height; row++) {
+        const colatitude = (row + 0.5) / height * Math.PI;
+        cosLat[row] = Math.cos(colatitude);
+        sinLat[row] = Math.sin(colatitude);
+      }
+
+      const pixels = new Uint8ClampedArray(width * height * 4);   // RGBA output
+      const waveMask = new Uint8Array(width * height);            // 255 where animated waves may be drawn
+      const bandColorA = [0, 0, 0], bandColorB = [0, 0, 0], color = [0, 0, 0];
+
+      // Land colour for a height band: blends the biome's low, middle and high colours into `out`.
+      const bandMix = (palette, lowToMid, midToHigh, out) => {
+        for (let channel = 0; channel < 3; channel++) {
+          const lowMid = palette[0][channel] + (palette[1][channel] - palette[0][channel]) * lowToMid;
+          out[channel] = lowMid + (palette[2][channel] - lowMid) * midToHigh;
+        }
+      };
+      const outlineHalfWidth = 2.3 * detailScale;   // outline half width in px
+
+      for (let row = 0; row < height; row++) {
+        const y = cosLat[row], absLatitude = Math.abs(y);
+        for (let col = 0; col < width; col++) {
+          const index = row * width + col, distanceToCoast = coastDistance[index] / 16;
+          sampleHeight(col, row);
+          const pixelHeight = sampled.height, isLand = pixelHeight > sea;
+          const alpha = 255;
           if (isLand) {
-            const t = rel(h), t1 = sm(0.28 - 0.014, 0.28 + 0.014, t), t2 = sm(0.6 - 0.014, 0.6 + 0.014, t);
-            const ie = edge(iceG, i, j), de = edge(desG, i, j);
-            const sIce = sm(ie - 0.004, ie + 0.004, ay), sDes = 1 - sm(de - 0.004, de + 0.004, ay), sSav = 1 - sm(de + 0.1 - 0.004, de + 0.1 + 0.004, ay);
-            bandMix(PAL.green, t1, t2, col);
-            if (sSav > 0) { bandMix(PAL.savanna, t1, t2, bandA); for (let q = 0; q < 3; q++) col[q] += (bandA[q] - col[q]) * sSav; }
-            if (sDes > 0) { bandMix(PAL.desert, t1, t2, bandB); for (let q = 0; q < 3; q++) col[q] += (bandB[q] - col[q]) * sDes; }
-            if (sIce > 0) { bandMix(PAL.ice, t1, t2, bandA); for (let q = 0; q < 3; q++) col[q] += (bandA[q] - col[q]) * sIce; }
+            // How high up this land is decides which of the three band colours it gets.
+            const t = relativeHeight(pixelHeight);
+            const lowToMid = smoothstep(0.28 - 0.014, 0.28 + 0.014, t);
+            const midToHigh = smoothstep(0.6 - 0.014, 0.6 + 0.014, t);
+            const iceLimit = edgeAt(iceGrid, col, row), desertLimit = edgeAt(desertGrid, col, row);
+            // How strongly each biome applies at this latitude (0 = not at all, 1 = fully).
+            const iceAmount = smoothstep(iceLimit - 0.004, iceLimit + 0.004, absLatitude);
+            const desertAmount = 1 - smoothstep(desertLimit - 0.004, desertLimit + 0.004, absLatitude);
+            const savannaAmount = 1 - smoothstep(desertLimit + 0.1 - 0.004, desertLimit + 0.1 + 0.004, absLatitude);
+            // Start with green, then blend savanna, desert and ice over the top.
+            bandMix(BIOME_PALETTE.green, lowToMid, midToHigh, color);
+            if (savannaAmount > 0) {
+              bandMix(BIOME_PALETTE.savanna, lowToMid, midToHigh, bandColorA);
+              for (let channel = 0; channel < 3; channel++) color[channel] += (bandColorA[channel] - color[channel]) * savannaAmount;
+            }
+            if (desertAmount > 0) {
+              bandMix(BIOME_PALETTE.desert, lowToMid, midToHigh, bandColorB);
+              for (let channel = 0; channel < 3; channel++) color[channel] += (bandColorB[channel] - color[channel]) * desertAmount;
+            }
+            if (iceAmount > 0) {
+              bandMix(BIOME_PALETTE.ice, lowToMid, midToHigh, bandColorA);
+              for (let channel = 0; channel < 3; channel++) color[channel] += (bandColorA[channel] - color[channel]) * iceAmount;
+            }
             // painterly detail: tufts / dunes / snow drifts, plus a faint contour line where the height bands meet
-            const sx = -cp[i] * st[j], sz = sp[i] * st[j];
-            const n1 = N.noise(sx * 85 + 11, y * 85, sz * 85);
-            const tuft = sm(0.6, 0.64, n1) * (1 - sIce);
-            const dune = sDes > 0.5 ? (0.5 + 0.5 * Math.sin((n1 * 1.4 + sx * 30 + y * 18) * 9)) * 0.028 : 0;
-            const shade = 1 - 0.07 * tuft - dune + 0.03 * (n1 - 0.5);
-            const cl = Math.min(Math.abs(t - 0.28), Math.abs(t - 0.6)) * (highest - sea) / out.g;   // px from the contour
-            const line = (1 - sm(0.6 * K, 1.6 * K, cl)) * 0.16;
+            const dirX = -cosLong[col] * sinLat[row], dirZ = sinLong[col] * sinLat[row];
+            const detailNoise = noiseGen.noise(dirX * 85 + 11, y * 85, dirZ * 85);
+            const tuft = smoothstep(0.6, 0.64, detailNoise) * (1 - iceAmount);
+            const dune = desertAmount > 0.5 ? (0.5 + 0.5 * Math.sin((detailNoise * 1.4 + dirX * 30 + y * 18) * 9)) * 0.028 : 0;
+            const shade = 1 - 0.07 * tuft - dune + 0.03 * (detailNoise - 0.5);
+            const pixelsFromContour = Math.min(Math.abs(t - 0.28), Math.abs(t - 0.6)) * (highest - sea) / sampled.gradient;
+            const contourLine = (1 - smoothstep(0.6 * detailScale, 1.6 * detailScale, pixelsFromContour)) * 0.16;
             // sandy lip just inside the coast
-            const lip = (1 - sm(OW + 1.0 * K, OW + 5 * K, u)) * 0.13;
-            for (let q = 0; q < 3; q++) col[q] = col[q] * shade * (1 - line) + 255 * lip;
+            const sandyLip = (1 - smoothstep(outlineHalfWidth + 1.0 * detailScale, outlineHalfWidth + 5 * detailScale, distanceToCoast)) * 0.13;
+            for (let channel = 0; channel < 3; channel++) color[channel] = color[channel] * shade * (1 - contourLine) + 255 * sandyLip;
           } else {
-            hAt(i, j, hS);
-            const dn0 = seaDepth01(out.h) * 12, fl = Math.floor(dn0), tt = sm(0.78, 1.0, dn0 - fl);
-            const c = lut[Math.min(1000, Math.round((fl + tt) / 12 * 1000))];
-            col[0] = c[0]; col[1] = c[1]; col[2] = c[2];
-            const ie = edge(iceG, i, j);
-            const sIceSea = sm(ie + 0.13 - 0.004, ie + 0.13 + 0.004, ay);
-            const open = 1 - sIceSea;
+            // Sea: pick the colour by depth (from the softened heights), banded into 12 steps.
+            sampleHeight(col, row, softHeights);
+            const scaledDepth = seaDepth01(sampled.height) * 12, wholeStep = Math.floor(scaledDepth);
+            const stepBlend = smoothstep(0.78, 1.0, scaledDepth - wholeStep);
+            const tableColor = seaColorTable[Math.min(1000, Math.round((wholeStep + stepBlend) / 12 * 1000))];
+            color[0] = tableColor[0]; color[1] = tableColor[1]; color[2] = tableColor[2];
+            const iceLimit = edgeAt(iceGrid, col, row);
+            const iceSeaAmount = smoothstep(iceLimit + 0.13 - 0.004, iceLimit + 0.13 + 0.004, absLatitude);
+            const openWater = 1 - iceSeaAmount;
             // foam collar and a fainter ripple ring further out
-            const foam = (1 - sm(OW + 5.5 * K, OW + 6.8 * K, u)) * 0.86;
-            const ring = Math.max(0, 1 - Math.abs(u - (OW + 11 * K)) / (1.1 * K)) * 0.38;
-            const f = Math.max(foam, ring) * open;
-            for (let q = 0; q < 3; q++) col[q] = col[q] * (1 - f) + FOAM[q] * f;
-            for (let q = 0; q < 3; q++) col[q] = col[q] * (1 - sIceSea) + ICESEA[q] * sIceSea;
-            mask[k] = open > 0.99 ? Math.round(sm(OW + 14 * K, OW + 24 * K, u) * 255) : 0;
+            const foam = (1 - smoothstep(outlineHalfWidth + 5.5 * detailScale, outlineHalfWidth + 6.8 * detailScale, distanceToCoast)) * 0.86;
+            const ripple = Math.max(0, 1 - Math.abs(distanceToCoast - (outlineHalfWidth + 11 * detailScale)) / (1.1 * detailScale)) * 0.38;
+            const foamAmount = Math.max(foam, ripple) * openWater;
+            for (let channel = 0; channel < 3; channel++) color[channel] = color[channel] * (1 - foamAmount) + FOAM[channel] * foamAmount;
+            for (let channel = 0; channel < 3; channel++) color[channel] = color[channel] * (1 - iceSeaAmount) + ICE_SEA[channel] * iceSeaAmount;
+            waveMask[index] = openWater > 0.99
+              ? Math.round(smoothstep(outlineHalfWidth + 14 * detailScale, outlineHalfWidth + 24 * detailScale, distanceToCoast) * 255)
+              : 0;
           }
           // ink outline, anti-aliased
-          const ink = 1 - sm(OW - 0.7 * K, OW + 0.7 * K, u);
-          px[k * 4] = col[0] * (1 - ink) + INK[0] * ink;
-          px[k * 4 + 1] = col[1] * (1 - ink) + INK[1] * ink;
-          px[k * 4 + 2] = col[2] * (1 - ink) + INK[2] * ink;
-          px[k * 4 + 3] = a;
+          const ink = 1 - smoothstep(outlineHalfWidth - 0.7 * detailScale, outlineHalfWidth + 0.7 * detailScale, distanceToCoast);
+          pixels[index * 4] = color[0] * (1 - ink) + INK[0] * ink;
+          pixels[index * 4 + 1] = color[1] * (1 - ink) + INK[1] * ink;
+          pixels[index * 4 + 2] = color[2] * (1 - ink) + INK[2] * ink;
+          pixels[index * 4 + 3] = alpha;
         }
       }
-      return { width: W, height: H, data: px, mask };
+      return { width, height, data: pixels, mask: waveMask };
     }
 
+    // A random point on the sphere, as a unit vector. `rng` is a function returning numbers in 0..1.
     function randomDir(rng) {
-      const z = rng() * 2 - 1, t = rng() * Math.PI * 2, r = Math.sqrt(1 - z * z);
-      return [r * Math.cos(t), z, r * Math.sin(t)];
+      const z = rng() * 2 - 1, angle = rng() * Math.PI * 2, ringRadius = Math.sqrt(1 - z * z);
+      return [ringRadius * Math.cos(angle), z, ringRadius * Math.sin(angle)];
     }
 
     return {
       seed, sea, lowest, highest,
       heightAt, biomeAt, dirFromUV, buildTexture, randomDir, seaDepth01, iceEdge, desertEdge,
-      isLand(d) { return heightAt(d[0], d[1], d[2]) > sea; },
-      relHeight(d) { return clamp01((heightAt(d[0], d[1], d[2]) - sea) / (highest - sea)); },
-      depth(d) { return seaDepth01(heightAt(d[0], d[1], d[2])); },
-      biome(d) { return biomeAt(d[0], d[1], d[2]); },
+      isLand(dir) { return heightAt(dir[0], dir[1], dir[2]) > sea; },
+      relHeight(dir) { return clamp01((heightAt(dir[0], dir[1], dir[2]) - sea) / (highest - sea)); },   // 0 at the coast, 1 at the highest peak
+      depth(dir) { return seaDepth01(heightAt(dir[0], dir[1], dir[2])); },
+      biome(dir) { return biomeAt(dir[0], dir[1], dir[2]); },
     };
   }
 
