@@ -2268,7 +2268,10 @@ function build() {
   // Moves boat/train `b` to where it should be at time `t`: out along its route, docked for DOCK seconds, back, docked again, and repeat.
   // Also records where it is in b.cur: s (distance along), leg, docked, prog (0..1 along this leg), eta (seconds to arrival), idx (route point).
   function updateBoat(b, t) {
-    const legTime = b.L / b.speed, cycleTime = 2 * (legTime + DOCK), cyclePosition = (t + b.off) % cycleTime;
+    const legTime = b.L / b.speed, cycleTime = 2 * (legTime + DOCK);
+    // `t` can be slightly negative on the first frames, and % keeps the sign, so wrap it back into 0..cycleTime
+    // (otherwise a boat with no offset would start behind its port and its story card would break).
+    const cyclePosition = (((t + b.off) % cycleTime) + cycleTime) % cycleTime;
     let s, leg, docked = false;
     if (cyclePosition < legTime) { s = cyclePosition * b.speed; leg = 'out'; }
     else if (cyclePosition < legTime + DOCK) { s = b.L; leg = 'out'; docked = true; }
