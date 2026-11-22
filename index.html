@@ -99,6 +99,7 @@
 <div id="card"><button id="cardX" aria-label="close">×</button><canvas id="cardPic" width="112" height="112"></canvas><div id="cardTxt"><h2></h2><div id="cardBody"></div></div></div>
 <div id="ageMsg"></div>
 <button id="alienBtn" aria-label="Alien invasion" title="Alien invasion"><svg viewBox="0 0 60 54"><path d="M30 3 L57 50 H3 Z" fill="#e01b1b" stroke="#fff" stroke-width="4" stroke-linejoin="round"/><path d="M30 12 L50 46 H10 Z" fill="#ffd400"/><ellipse cx="30" cy="34" rx="8" ry="9" fill="#3fa82f"/><ellipse cx="30" cy="31" rx="4.5" ry="4" fill="#fff"/><circle cx="30" cy="31" r="2" fill="#111"/><path d="M24 40 q-3 5 -6 4 M36 40 q3 5 6 4 M30 42 v5" stroke="#3fa82f" stroke-width="2" fill="none" stroke-linecap="round"/></svg><span>Alien invasion</span></button>
+<button id="blackHoleBtn" aria-label="Black hole" title="Black hole"><svg viewBox="0 0 60 60"><defs><radialGradient id="bhGlow" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#fff6c8"/><stop offset="35%" stop-color="#ffd400"/><stop offset="70%" stop-color="#ff8a00" stop-opacity="0.55"/><stop offset="100%" stop-color="#ff8a00" stop-opacity="0"/></radialGradient></defs><circle cx="30" cy="30" r="28" fill="url(#bhGlow)"/><circle cx="30" cy="30" r="12" fill="#050108"/></svg><span>Black hole</span></button>
 <div id="loading">Making a planet…</div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
@@ -106,6 +107,7 @@
 <script src="planet-gen.js"></script>
 <script src="city-gen.js"></script>
 <script src="invasion.js"></script>
+<script src="blackhole.js"></script>
 <script>
 (function () {
 'use strict';
@@ -1326,7 +1328,7 @@ function build() {
     planetGroup.add(volcano);
     // An invisible cone over the volcano that you can click or tap.
     const hitCone = new T.Mesh(new T.CylinderGeometry(0.1, 0.17, 0.2, 10).translate(0, 0.1, 0), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
-    const volcanoInfo = { name, n: site.clone(), erupt: () => { eruptTimeLeft = 7; } };   // erupt(): seven seconds of lava
+    const volcanoInfo = { name, n: site.clone(), erupt: () => { eruptTimeLeft = 7; }, group: volcano };   // erupt(): seven seconds of lava
     hitCone.userData = { kind: 'volcano', ref: volcanoInfo };
     volcano.add(hitCone);
     pickables.push(hitCone);
@@ -1586,7 +1588,7 @@ function build() {
     planetGroup.add(mountain);
     // An invisible cone over the mountain that you can click or tap.
     const hitCone = new T.Mesh(new T.CylinderGeometry(0.12, 0.19, 0.24, 10).translate(0, 0.12, 0), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
-    const mountainInfo = { name, n: site.clone(), erupt: () => { boost = 5; }, api };      // a poke starts a proper downpour
+    const mountainInfo = { name, n: site.clone(), erupt: () => { boost = 5; }, api, group: mountain };      // a poke starts a proper downpour
     hitCone.userData = { kind: 'volcano', ref: mountainInfo };
     mountain.add(hitCone);
     pickables.push(hitCone);
@@ -3089,6 +3091,7 @@ function build() {
       stationLabel.n.copy(station.n);
     });
     station.hitObj = hitSphere;
+    station.group = stationGroup;
   }
 
   /* --- the launch pad: tap it and a rocket carries a new satellite into orbit --- */
@@ -3268,11 +3271,23 @@ function build() {
 
   /* ---------- the alien invasion (space age only, see invasion.js) ---------- */
   // Everything invasion.js needs from this page, handed over in one object (see the notes at the top of invasion.js).
-  const invCtx = { T, scene, planetGroup, camera, renderer, canvas, cities, nugget: volcanoes.find(v => v.api), tickers, toon, withInk, inkMat, partShader, placeOnSurface, TOWN_S, K,
-    setFocus: (n, d) => setFocus(n, d), releaseFocus: () => releaseFocus(), onEnd: () => { invasion = null; } };
+  const invCtx = { T, scene, planetGroup, camera, renderer, canvas, controls, cities, nugget: volcanoes.find(v => v.api), tickers, toon, withInk, inkMat, partShader, placeOnSurface, TOWN_S, K,
+    setFocus: (n, d) => setFocus(n, d), releaseFocus: () => releaseFocus(), onEnd: () => { invasion = null; },
+    // Called once, at the top of the escape cutscene, with the direction (from the planet's centre) the last
+    // saucer fled in. This is where the aliens' wormhole opens, so it is also where the black hole appears.
+    onAliensGone: (direction) => { if (window.NPBlackHole) window.NPBlackHole.spawnHole(bhCtx, direction); } };
   let invasion = null;      // the running invasion, or null
   const startInvasion = () => { if (!invasion && AGE === 'space') invasion = NPInvasion.start(invCtx); };
   document.getElementById('alienBtn').onclick = () => { if (AGE === 'space' && !invasion) NPInvasion.confirm(startInvasion); };
+
+  /* ---------- the black hole (space age only, see blackhole.js) ---------- */
+  // Everything blackhole.js needs from this page. It appears (see onAliensGone above) once an invasion has run
+  // to completion, and stays dormant in the background until the button below is pressed.
+  const bhCtx = { T, scene, planetGroup, camera, renderer, canvas, controls, station, satellites, volcanoes, tickers, partShader, planetMat, toon,
+    onEnd: () => { blackHole = null; document.body.classList.remove('bh-active'); } };
+  let blackHole = null;      // the running black-hole sequence, or null
+  const startBlackHole = () => { if (!blackHole && AGE === 'space') blackHole = NPBlackHole.start(bhCtx); };
+  document.getElementById('blackHoleBtn').onclick = () => { if (AGE === 'space' && !blackHole && NPBlackHole.unlocked()) NPBlackHole.confirm(startBlackHole); };
 
   /* UI lists: a city button and a wonder button, each opening its own list */
   const list = document.getElementById('places'), cityBtn = document.getElementById('cityBtn'), wonderBtn = document.getElementById('wonderBtn');
@@ -3439,7 +3454,8 @@ function build() {
   // What the rest of the page (cards, selection, input) is allowed to see of the world.
   world = { P, cities, volcanoes, storms, boats, selectBoat, clearBoat, boatSelected: () => !!selectedBoat };
   // Debugging: add ?debug to the address to reach the world from the browser console as window.__np.
-  if (new URLSearchParams(location.search).has('debug')) window.__np = { invade: () => { startInvasion(); return invasion; }, setAge: a => setAge(a), launch, satellites, countries, camera, controls, scene, planetGroup, boats, storms, volcanoes, cities, rail, T, tilted: () => tiltedMat };
+  if (new URLSearchParams(location.search).has('debug')) window.__np = { invade: () => { startInvasion(); return invasion; }, setAge: a => setAge(a), launch, satellites, countries, camera, controls, scene, planetGroup, boats, storms, volcanoes, cities, rail, T, tilted: () => tiltedMat,
+    blackHole: () => { startBlackHole(); return blackHole; }, station, tickers };
   // Debugging: ?go=volcano | volcano2 | volcano3 | storm | storm2 | city3 | boat2 jumps straight to that thing (and ?d= sets the camera distance).
   const goTarget = new URLSearchParams(location.search).get('go');
   if (goTarget) setTimeout(() => {
@@ -3857,7 +3873,7 @@ requestAnimationFrame(() => setTimeout(() => {
 // Works by fetching every file of the site and comparing a hash of each with the hash from when this page loaded.
 // A difference means a new version has been published (the repository is served by GitHub Pages).
 (() => {
-  const FILES = ['index.html', 'planet-gen.js', 'planet-worker.js', 'planet-tile.js', 'planet-tile-worker.js', 'city-gen.js', 'invasion.js', 'manifest.webmanifest'];
+  const FILES = ['index.html', 'planet-gen.js', 'planet-worker.js', 'planet-tile.js', 'planet-tile-worker.js', 'city-gen.js', 'invasion.js', 'blackhole.js', 'manifest.webmanifest'];
   const button = document.getElementById('updBtn'), message = document.getElementById('updMsg');
   // base: the signature of the files this page was loaded with; available: a newer version exists; busy: a check or update is running.
   let base = null, available = false, busy = false, lastCheck = 0, messageTimer = 0;
