@@ -1760,6 +1760,8 @@ function build() {
     return null;
   };
   /* ---------- boats: real voyages between ports ---------- */
+  // One entry per ship: its name, captain, preferred home port (`pref`), what it carries out and back, and the
+  // captain's log shown on its card ({from} and {to} are replaced with the port names).
   const BOAT_SPECS = [
     { name: 'The Wobbleberry', captain: 'Captain Mabel Plonk', pref: 'Nubbin Bay',
       out: '4,000 jars of blueberry jam', back: '4,000 empty jars (the crew say they know nothing)',
@@ -1827,106 +1829,181 @@ function build() {
       blogs: ['Heading to {to} with cold toast. Morale is low. Hunger is not.', 'The captain\'s hat is made of toast. It is slightly burnt, like a good hat.'] },
   ];
 
-  for (let j = 0; j < GH; j++) for (let i = 0; i < GW; i++) {
-    const k = j * GW + i; let free = 1;
-    if (Math.abs(gDir[k * 3 + 1]) > 0.9) free = 0;
-    for (const s of storms) {
-      if (free && gDir[k * 3] * s.n.x + gDir[k * 3 + 1] * s.n.y + gDir[k * 3 + 2] * s.n.z > Math.cos(s.r + 0.07)) free = 0;
+  // Mark every grid cell that a ship may sail through (gOk = 1): open sea, at least 2 cells from any coast,
+  // away from the polar caps and clear of the storms.
+  for (let row = 0; row < GH; row++) for (let col = 0; col < GW; col++) {
+    const cell = row * GW + col;
+    let free = 1;
+    if (Math.abs(gDir[cell * 3 + 1]) > 0.9) free = 0;
+    for (const storm of storms) {
+      if (free && gDir[cell * 3] * storm.n.x + gDir[cell * 3 + 1] * storm.n.y + gDir[cell * 3 + 2] * storm.n.z > Math.cos(storm.r + 0.07)) free = 0;
     }
-    for (let dj = -2; free && dj <= 2; dj++) {
-      const jj = j + dj; if (jj < 0 || jj >= GH) continue;
-      for (let di = -2; di <= 2; di++) if (gLand[jj * GW + ((i + di + GW) % GW)]) { free = 0; break; }
+    for (let dRow = -2; free && dRow <= 2; dRow++) {
+      const neighbourRow = row + dRow;
+      if (neighbourRow < 0 || neighbourRow >= GH) continue;
+      for (let dCol = -2; dCol <= 2; dCol++) if (gLand[neighbourRow * GW + ((col + dCol + GW) % GW)]) { free = 0; break; }
     }
-    gOk[k] = free;
+    gOk[cell] = free;
   }
-  function portCell(city) {           // nearest free sea cell, grown outward from the city
-    const start = cellOf(city.n), seen = new Set([start]); let ring = [start];
+  // The nearest sailable sea cell to a city (searching outward up to 70 rings), or -1 if none: the city's port.
+  function portCell(city) {
+    const start = cellOf(city.n), seen = new Set([start]);
+    let ring = [start];
     for (let r = 0; r < 70 && ring.length; r++) {
-      const nxt = [];
-      for (const k of ring) { if (gOk[k]) return k; neighbours(k, q => { if (!seen.has(q)) { seen.add(q); nxt.push(q); } }); }
-      ring = nxt;
+      const nextRing = [];
+      for (const cell of ring) {
+        if (gOk[cell]) return cell;
+        neighbours(cell, next => { if (!seen.has(next)) { seen.add(next); nextRing.push(next); } });
+      }
+      ring = nextRing;
     }
     return -1;
   }
-  function dijkstra(src) {
+  // Shortest sea routes from grid cell `source` to every sailable cell (Dijkstra with a binary heap).
+  // Returns { dist, prev }: the distance in radians to each cell, and the previous cell on the way back.
+  function dijkstra(source) {
     const dist = new Float32Array(GN).fill(Infinity), prev = new Int32Array(GN).fill(-1);
-    const heap = []; // [d, k]
-    const push = (d, k) => { heap.push([d, k]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
-    const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { let l = 2 * i + 1, r = l + 1, m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
-    dist[src] = 0; push(0, src);
+    const heap = []; // [distance, cell]
+    const push = (distance, cell) => {
+      heap.push([distance, cell]);
+      let i = heap.length - 1;
+      while (i > 0) {
+        const parent = (i - 1) >> 1;
+        if (heap[parent][0] <= heap[i][0]) break;
+        [heap[parent], heap[i]] = [heap[i], heap[parent]];
+        i = parent;
+      }
+    };
+    const pop = () => {
+      const top = heap[0], last = heap.pop();
+      if (heap.length) {
+        heap[0] = last;
+        let i = 0;
+        for (;;) {
+          let left = 2 * i + 1, right = left + 1, smallest = i;
+          if (left < heap.length && heap[left][0] < heap[smallest][0]) smallest = left;
+          if (right < heap.length && heap[right][0] < heap[smallest][0]) smallest = right;
+          if (smallest === i) break;
+          [heap[smallest], heap[i]] = [heap[i], heap[smallest]];
+          i = smallest;
+        }
+      }
+      return top;
+    };
+    dist[source] = 0;
+    push(0, source);
     while (heap.length) {
-      const [d, k] = pop(); if (d > dist[k]) continue;
-      neighbours(k, q => { if (!gOk[q]) return; const nd = d + cellAng(k, q); if (nd < dist[q]) { dist[q] = nd; prev[q] = k; push(nd, q); } });
+      const [distance, cell] = pop();
+      if (distance > dist[cell]) continue;
+      neighbours(cell, next => {
+        if (!gOk[next]) return;
+        const newDistance = distance + cellAng(cell, next);
+        if (newDistance < dist[next]) { dist[next] = newDistance; prev[next] = cell; push(newDistance, next); }
+      });
     }
     return { dist, prev };
   }
-  const landFree = pts => {
-    for (let i = 0; i < pts.length - 1; i++) for (let k = 0; k < 4; k++) {
-      const q = pts[i].clone().lerp(pts[i + 1], k / 4).normalize(); if (P.isLand([q.x, q.y, q.z])) return false;
+  // Does the path (a list of unit vectors) stay entirely out at sea?
+  const landFree = points => {
+    for (let i = 0; i < points.length - 1; i++) for (let k = 0; k < 4; k++) {
+      const sample = points[i].clone().lerp(points[i + 1], k / 4).normalize();
+      if (P.isLand([sample.x, sample.y, sample.z])) return false;
     }
     return true;
   };
-  function buildRoute(sp, dp, dst) {   // sp: dijkstra result from the source port, dst: destination cell
-    const cells = []; for (let k = dst; k !== -1; k = sp.prev[k]) cells.push(k); cells.reverse();
-    const base = cells.map(k => new T.Vector3(gDir[k * 3], gDir[k * 3 + 1], gDir[k * 3 + 2]));
-    let pts = base;
-    for (const iters of [14, 7, 3, 0]) {
-      let q = base.map(v => v.clone());
-      for (let it = 0; it < iters; it++) {
-        const nq = q.map(v => v.clone());
-        for (let i = 1; i < q.length - 1; i++) nq[i].copy(q[i - 1]).add(q[i].clone().multiplyScalar(2)).add(q[i + 1]).normalize();
-        q = nq;
+  // Builds a smooth sailing route (a list of unit vectors, evenly spaced) from the source port to cell `dst`.
+  // `sp` is the dijkstra result from the source port. (The second argument is unused.)
+  function buildRoute(sp, dp, dst) {
+    const cells = [];
+    for (let cell = dst; cell !== -1; cell = sp.prev[cell]) cells.push(cell);    // walk back from the destination...
+    cells.reverse();                                                              // ...then turn it round
+    const base = cells.map(cell => new T.Vector3(gDir[cell * 3], gDir[cell * 3 + 1], gDir[cell * 3 + 2]));
+    // Smooth the blocky grid route: try heavy smoothing first and fall back to lighter if it would touch land.
+    let points = base;
+    for (const iterations of [14, 7, 3, 0]) {
+      let smoothed = base.map(v => v.clone());
+      for (let iteration = 0; iteration < iterations; iteration++) {
+        const next = smoothed.map(v => v.clone());
+        for (let i = 1; i < smoothed.length - 1; i++) next[i].copy(smoothed[i - 1]).add(smoothed[i].clone().multiplyScalar(2)).add(smoothed[i + 1]).normalize();
+        smoothed = next;
       }
-      if (landFree(q)) { pts = q; break; }
+      if (landFree(smoothed)) { points = smoothed; break; }
     }
     // resample to even spacing
-    const out = [pts[0].clone()]; let carry = 0;
-    for (let i = 0; i < pts.length - 1; i++) {
-      const a = pts[i], b = pts[i + 1], seg = Math.acos(Math.min(1, a.dot(b)));
-      let pos = SPACING - carry;
-      while (pos <= seg) { out.push(a.clone().lerp(b, pos / seg).normalize()); pos += SPACING; }
-      carry = seg - (pos - SPACING);
+    const resampled = [points[0].clone()];
+    let carry = 0;
+    for (let i = 0; i < points.length - 1; i++) {
+      const from = points[i], to = points[i + 1], segmentLength = Math.acos(Math.min(1, from.dot(to)));
+      let position = SPACING - carry;
+      while (position <= segmentLength) { resampled.push(from.clone().lerp(to, position / segmentLength).normalize()); position += SPACING; }
+      carry = segmentLength - (position - SPACING);
     }
-    out.push(pts[pts.length - 1].clone());
-    return out;
+    resampled.push(points[points.length - 1].clone());
+    return resampled;
   }
 
-  const portOf = new Map(); cities.forEach(c => { const k = portCell(c); if (k >= 0 && angle(c.n, new T.Vector3(gDir[k * 3], gDir[k * 3 + 1], gDir[k * 3 + 2])) < 0.5) portOf.set(c, k); });
-  const dj = new Map(); const djFor = c => { if (!dj.has(c)) dj.set(c, dijkstra(portOf.get(c))); return dj.get(c); };
-  const ports = cities.filter(c => portOf.has(c));
-  const usedPair = new Set();
+  // Which cities have a port (a sailable cell within 0.5 radians), and the grid cell of each port.
+  const portOf = new Map();
+  cities.forEach(city => {
+    const cell = portCell(city);
+    if (cell >= 0 && angle(city.n, new T.Vector3(gDir[cell * 3], gDir[cell * 3 + 1], gDir[cell * 3 + 2])) < 0.5) portOf.set(city, cell);
+  });
+  // Sea distances from a city's port to everywhere, worked out on first use and remembered.
+  const routesFromPort = new Map();
+  const djFor = city => {
+    if (!routesFromPort.has(city)) routesFromPort.set(city, dijkstra(portOf.get(city)));
+    return routesFromPort.get(city);
+  };
+  const ports = cities.filter(city => portOf.has(city));
+  const usedPair = new Set();   // pairs of ports already given a ship, so voyages are different
   const boats = [];
-  const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  // A shuffled copy of an array (uses the seeded generator, so the same every time).
+  const shuffle = list => {
+    list = list.slice();
+    for (let i = list.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [list[i], list[j]] = [list[j], list[i]];
+    }
+    return list;
+  };
   /* a proper little ship: curved hull, mast, two curved sails, flag and a foamy wake */
   const hullShape = new T.Shape();
-  hullShape.moveTo(-0.03, 0.013); hullShape.lineTo(-0.024, 0.0); hullShape.lineTo(0.02, 0.0);
-  hullShape.quadraticCurveTo(0.034, 0.003, 0.041, 0.017); hullShape.lineTo(0.0, 0.0145); hullShape.lineTo(-0.03, 0.013);
+  hullShape.moveTo(-0.03, 0.013);
+  hullShape.lineTo(-0.024, 0.0);
+  hullShape.lineTo(0.02, 0.0);
+  hullShape.quadraticCurveTo(0.034, 0.003, 0.041, 0.017);
+  hullShape.lineTo(0.0, 0.0145);
+  hullShape.lineTo(-0.03, 0.013);
   const hullGeo = new T.ExtrudeGeometry(hullShape, { depth: 0.016, bevelEnabled: true, bevelThickness: 0.002, bevelSize: 0.0018, bevelSegments: 2, curveSegments: 10 }).translate(0, 0, -0.008);
+  // A triangular sail with corners p0, p1, p2 ([x, y] each), bulging out in z by `bulge` like it is full of wind.
   function sailGeo(p0, p1, p2, bulge) {
-    const g = new T.ShapeGeometry(new T.Shape([new T.Vector2(p0[0], p0[1]), new T.Vector2(p1[0], p1[1]), new T.Vector2(p2[0], p2[1])]), 1);
-    const q = g.attributes.position, cx = (p0[0] + p1[0] + p2[0]) / 3;
-    for (let i = 0; i < q.count; i++) q.setZ(i, bulge * Math.cos((q.getX(i) - cx) * 40) * 0.8 + bulge * 0.3);
-    g.computeVertexNormals(); return g;
+    const geometry = new T.ShapeGeometry(new T.Shape([new T.Vector2(p0[0], p0[1]), new T.Vector2(p1[0], p1[1]), new T.Vector2(p2[0], p2[1])]), 1);
+    const positions = geometry.attributes.position, centreX = (p0[0] + p1[0] + p2[0]) / 3;
+    for (let i = 0; i < positions.count; i++) positions.setZ(i, bulge * Math.cos((positions.getX(i) - centreX) * 40) * 0.8 + bulge * 0.3);
+    geometry.computeVertexNormals();
+    return geometry;
   }
   const mainSail = sailGeo([0.004, 0.016], [0.004, 0.056], [-0.022, 0.019], 0.0045);
   const jibSail = sailGeo([0.009, 0.016], [0.009, 0.046], [0.034, 0.019], -0.0035);
   const mastGeo = new T.CylinderGeometry(0.0012, 0.0016, 0.058, 6).translate(0.0065, 0.043, 0);
   const flagGeo = new T.BoxGeometry(0.009, 0.005, 0.0008).translate(0.011, 0.068, 0);
   const wakeGeo = (() => {   // three little foam puffs trailing behind the stern
-    const parts = [[-0.05, 0.016], [-0.078, 0.012], [-0.102, 0.008]].map(([x, r]) => new T.CircleGeometry(r, 14).rotateX(-Math.PI / 2).translate(x, 0.002, 0));
-    return mergeParts(parts.map(g => [g, new T.Color(1, 1, 1)]));
+    const puffs = [[-0.05, 0.016], [-0.078, 0.012], [-0.102, 0.008]].map(([x, radius]) => new T.CircleGeometry(radius, 14).rotateX(-Math.PI / 2).translate(x, 0.002, 0));
+    return mergeParts(puffs.map(geometry => [geometry, new T.Color(1, 1, 1)]));
   })();
   const hullCols = [0x9a5b2f, 0x2f6f9a, 0x9a2f4f, 0x4f9a2f, 0x7a4fb0, 0xc27a1f];
-  BOAT_SPECS.forEach((spec, bi) => {
-    const pref = ports.find(c => c.name === spec.pref);
-    const Aopts = pref ? [pref, ...shuffle(ports.filter(c => c !== pref))] : shuffle(ports);
+  // Give every ship in BOAT_SPECS a voyage between two ports: its preferred home port first if it has one, a
+  // destination 0.7 to 3.2 radians away, and a pair nobody has used yet (if possible). Ships that cannot find a route are skipped.
+  BOAT_SPECS.forEach((spec, boatIndex) => {
+    const preferred = ports.find(city => city.name === spec.pref);
+    const startOptions = preferred ? [preferred, ...shuffle(ports.filter(city => city !== preferred))] : shuffle(ports);
     let found = null;
     for (const allowRepeat of [false, true]) {
-      for (const A of Aopts) {
-        const sp = djFor(A);
-        const B = shuffle(ports.filter(c => c !== A && sp.dist[portOf.get(c)] > 0.7 && sp.dist[portOf.get(c)] < 3.2))
-          .find(c => allowRepeat || !usedPair.has([A.name, c.name].sort().join()));
-        if (B) { found = { A, B, sp }; break; }
+      for (const start of startOptions) {
+        const routes = djFor(start);
+        const end = shuffle(ports.filter(city => city !== start && routes.dist[portOf.get(city)] > 0.7 && routes.dist[portOf.get(city)] < 3.2))
+          .find(city => allowRepeat || !usedPair.has([start.name, city.name].sort().join()));
+        if (end) { found = { A: start, B: end, sp: routes }; break; }
       }
       if (found) break;
     }
@@ -1936,19 +2013,24 @@ function build() {
       usedPair.add([A.name, B.name].sort().join());
       const pts = buildRoute(sp, null, portOf.get(B));
       if (pts.length < 40) return;
-      const g = new T.Group(), inner = new T.Group();
-      const hull = withInk(new T.Mesh(hullGeo, toon(hullCols[bi % 6])), 1.16);
-      const sailM = toon(0xffffff, { side: T.DoubleSide }), jibM = toon(0xfff1c2, { side: T.DoubleSide });
+      const boatGroup = new T.Group(), inner = new T.Group();
+      const hull = withInk(new T.Mesh(hullGeo, toon(hullCols[boatIndex % 6])), 1.16);
+      const mainSailMaterial = toon(0xffffff, { side: T.DoubleSide }), jibMaterial = toon(0xfff1c2, { side: T.DoubleSide });
       const mast = new T.Mesh(mastGeo, toon(0x5a3a22)), flag = new T.Mesh(flagGeo, toon(0xff4d6d, { side: T.DoubleSide }));
       const wake = new T.Mesh(wakeGeo, new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, depthWrite: false, side: T.DoubleSide }));
-      inner.add(hull, mast, new T.Mesh(mainSail, sailM), new T.Mesh(jibSail, jibM), flag, wake);
+      inner.add(hull, mast, new T.Mesh(mainSail, mainSailMaterial), new T.Mesh(jibSail, jibMaterial), flag, wake);
       inner.scale.setScalar(K * 1.15);
-      const hit = new T.Mesh(new T.SphereGeometry(0.035, 8, 6), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
-      hit.position.y = 0.02;
-      g.add(inner, hit); planetGroup.add(g);
-      const b = { spec, A, B, pts, L: (pts.length - 1) * SPACING, speed: 0.032 + rng() * 0.012, off: rng() * 200, g, n: new T.Vector3(), cur: {} };
-      hit.userData = { kind: 'boat', ref: b }; pickables.push(hit);
-      boats.push(b);
+      // An invisible sphere round the ship that you can click or tap.
+      const hitSphere = new T.Mesh(new T.SphereGeometry(0.035, 8, 6), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+      hitSphere.position.y = 0.02;
+      boatGroup.add(inner, hitSphere);
+      planetGroup.add(boatGroup);
+      // The boat: spec (story), A and B (its two ports), pts (route), L (route length), speed, off (time offset
+      // so ships don't all start together), g (3D group), n (current direction), cur (state used by the card and updater).
+      const boat = { spec, A, B, pts, L: (pts.length - 1) * SPACING, speed: 0.032 + rng() * 0.012, off: rng() * 200, g: boatGroup, n: new T.Vector3(), cur: {} };
+      hitSphere.userData = { kind: 'boat', ref: boat };
+      pickables.push(hitSphere);
+      boats.push(boat);
     }
   });
   /* ---------- steam trains on the railway ---------- */
