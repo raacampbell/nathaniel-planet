@@ -2759,116 +2759,190 @@ function build() {
 
   /* ---------- the frozen lake, poleward of Fizzlewick, and its trick-skating penguin ---------- */
   {
-    const fz = cities.find(c => c.name === 'Fizzlewick');
-    if (fz) {
-      const poleSign = fz.n.y >= 0 ? 1 : -1;
+    const fizzlewick = cities.find(city => city.name === 'Fizzlewick');
+    if (fizzlewick) {
+      const poleSign = fizzlewick.n.y >= 0 ? 1 : -1;     // +1 if the town is in the north, -1 in the south
       // a clear, separate spot: not right on top of the town, and preferring an ideal "just beyond it" distance
-      const scoreOf = c => -Math.abs(angle(c.n, fz.n) - 0.22) * 1.6 - c.h * 0.4 + c.n.y * poleSign * 0.6;
-      let pool = cand.filter(c => c.b === 'ice' && angle(c.n, fz.n) > 0.08 && c.n.y * poleSign > fz.n.y * poleSign - 0.02);
-      if (!pool.length) pool = cand.filter(c => angle(c.n, fz.n) > 0.08 && c.n.y * poleSign > fz.n.y * poleSign + 0.03);   // fallback: just go poleward
-      if (!pool.length) pool = cand.filter(c => angle(c.n, fz.n) > 0.08);
+      const scoreOf = candidate => -Math.abs(angle(candidate.n, fizzlewick.n) - 0.22) * 1.6 - candidate.h * 0.4 + candidate.n.y * poleSign * 0.6;
+      let pool = cand.filter(c => c.b === 'ice' && angle(c.n, fizzlewick.n) > 0.08 && c.n.y * poleSign > fizzlewick.n.y * poleSign - 0.02);
+      if (!pool.length) pool = cand.filter(c => angle(c.n, fizzlewick.n) > 0.08 && c.n.y * poleSign > fizzlewick.n.y * poleSign + 0.03);   // fallback: just go poleward
+      if (!pool.length) pool = cand.filter(c => angle(c.n, fizzlewick.n) > 0.08);
       let lake = null, lakeScore = -1e9;
-      for (const c of pool) { const s = scoreOf(c); if (s > lakeScore) { lakeScore = s; lake = c; } }
+      for (const candidate of pool) {
+        const score = scoreOf(candidate);
+        if (score > lakeScore) { lakeScore = score; lake = candidate; }
+      }
       if (lake) {
-        const ln = lake.n.clone(), lS = K * 1.2;
-        const lg = new T.Group();
-        lg.add(withInk(new T.Mesh(new T.CircleGeometry(0.11 * lS, 36).rotateX(-Math.PI / 2), toon(0xd6f3ff, { transparent: true, opacity: 0.95 })), 1.04));
-        const rim = new T.Mesh(new T.RingGeometry(0.1 * lS, 0.115 * lS, 36).rotateX(-Math.PI / 2), toon(0xffffff)); rim.position.y = 0.0005; lg.add(rim);
-        for (let i = 0; i < 4; i++) { const a = rng() * 6.283, r = rng() * 0.08 * lS; const crack = new T.Mesh(new T.PlaneGeometry(0.002 * lS, (0.03 + rng() * 0.04) * lS), new T.MeshBasicMaterial({ color: 0xaee3f5, transparent: true, opacity: 0.5 })); crack.rotation.x = -Math.PI / 2; crack.rotation.z = rng() * 6.283; crack.position.set(Math.cos(a) * r, 0.0008, Math.sin(a) * r); lg.add(crack); }
-        placeOnSurface(lg, ln, 1.0, rng() * 6);
-        planetGroup.add(lg);
-        const lakeRef = { n: ln, li: 0, name: 'Frozen Lake' };
-        const hitM = new T.Mesh(new T.SphereGeometry(1, 8, 6), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
-        hitM.position.copy(ln).multiplyScalar(1.01); hitM.scale.setScalar(0.13 * lS);
-        hitM.userData = { kind: 'lake', ref: lakeRef }; planetGroup.add(hitM); pickables.push(hitM);
-        addLabel('Frozen Lake', ln, 1 + 0.12 * lS + 0.05, 'lake', () => select('lake', lakeRef));
+        const lakePosition = lake.n.clone(), lakeScale = K * 1.2;
+        const lakeGroup = new T.Group();
+        // pale blue ice disc with a white rim and four hairline cracks
+        lakeGroup.add(withInk(new T.Mesh(new T.CircleGeometry(0.11 * lakeScale, 36).rotateX(-Math.PI / 2), toon(0xd6f3ff, { transparent: true, opacity: 0.95 })), 1.04));
+        const rim = new T.Mesh(new T.RingGeometry(0.1 * lakeScale, 0.115 * lakeScale, 36).rotateX(-Math.PI / 2), toon(0xffffff));
+        rim.position.y = 0.0005;
+        lakeGroup.add(rim);
+        for (let i = 0; i < 4; i++) {
+          const crackAngle = rng() * 6.283, crackRadius = rng() * 0.08 * lakeScale;
+          const crack = new T.Mesh(new T.PlaneGeometry(0.002 * lakeScale, (0.03 + rng() * 0.04) * lakeScale), new T.MeshBasicMaterial({ color: 0xaee3f5, transparent: true, opacity: 0.5 }));
+          crack.rotation.x = -Math.PI / 2;
+          crack.rotation.z = rng() * 6.283;
+          crack.position.set(Math.cos(crackAngle) * crackRadius, 0.0008, Math.sin(crackAngle) * crackRadius);
+          lakeGroup.add(crack);
+        }
+        placeOnSurface(lakeGroup, lakePosition, 1.0, rng() * 6);
+        planetGroup.add(lakeGroup);
+        const lakeRef = { n: lakePosition, li: 0, name: 'Frozen Lake' };
+        // An invisible sphere over the lake that you can click or tap.
+        const hitSphere = new T.Mesh(new T.SphereGeometry(1, 8, 6), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+        hitSphere.position.copy(lakePosition).multiplyScalar(1.01);
+        hitSphere.scale.setScalar(0.13 * lakeScale);
+        hitSphere.userData = { kind: 'lake', ref: lakeRef };
+        planetGroup.add(hitSphere);
+        pickables.push(hitSphere);
+        addLabel('Frozen Lake', lakePosition, 1 + 0.12 * lakeScale + 0.05, 'lake', () => select('lake', lakeRef));
 
         // the skater, forever practising its tricks
-        const pk = new T.Group();
-        pk.add(withInk(new T.Mesh(new T.SphereGeometry(1, 14, 10).scale(0.8, 1.15, 0.8), toon(0x1a1a22)), 1.1));
-        const belly = new T.Mesh(new T.SphereGeometry(1, 12, 8).scale(0.6, 0.85, 0.5), toon(0xffffff)); belly.position.set(0, -0.08, 0.28); pk.add(belly);
-        pk.add((() => { const b = new T.Mesh(new T.ConeGeometry(0.22, 0.5, 8).rotateX(Math.PI / 2), toon(0xff9a3d)); b.position.set(0, 0.55, 0.78); return b; })());
-        const wingL = new T.Mesh(new T.SphereGeometry(1, 8, 6).scale(0.22, 0.8, 0.4), toon(0x1a1a22)); wingL.position.set(-0.78, 0.1, 0); pk.add(wingL);
-        const wingR = wingL.clone(); wingR.position.x = 0.78; pk.add(wingR);
-        pk.scale.setScalar(0.012 * lS);
-        const skRoot = new T.Group(); skRoot.add(pk); placeOnSurface(skRoot, ln, 1.001, 0); planetGroup.add(skRoot);
-        const skR = 0.06 * lS, trickEvery = 7;
+        const skater = new T.Group();
+        skater.add(withInk(new T.Mesh(new T.SphereGeometry(1, 14, 10).scale(0.8, 1.15, 0.8), toon(0x1a1a22)), 1.1));
+        const belly = new T.Mesh(new T.SphereGeometry(1, 12, 8).scale(0.6, 0.85, 0.5), toon(0xffffff));
+        belly.position.set(0, -0.08, 0.28);
+        skater.add(belly);
+        skater.add((() => {                                    // the beak
+          const beak = new T.Mesh(new T.ConeGeometry(0.22, 0.5, 8).rotateX(Math.PI / 2), toon(0xff9a3d));
+          beak.position.set(0, 0.55, 0.78);
+          return beak;
+        })());
+        const wingLeft = new T.Mesh(new T.SphereGeometry(1, 8, 6).scale(0.22, 0.8, 0.4), toon(0x1a1a22));
+        wingLeft.position.set(-0.78, 0.1, 0);
+        skater.add(wingLeft);
+        const wingRight = wingLeft.clone();
+        wingRight.position.x = 0.78;
+        skater.add(wingRight);
+        skater.scale.setScalar(0.012 * lakeScale);
+        const skaterRoot = new T.Group();                     // holds the penguin so it can be moved round the lake
+        skaterRoot.add(skater);
+        placeOnSurface(skaterRoot, lakePosition, 1.001, 0);
+        planetGroup.add(skaterRoot);
+        const skateRadius = 0.06 * lakeScale, trickEvery = 7;   // it circles the lake and does a jump-and-spin every 7 seconds
         tickers.push(t => {
-          const lap = t * 0.6, trickPh = t % trickEvery, inTrick = trickPh < 1.4;
-          pk.position.set(Math.cos(lap) * skR, 0.003 * lS + (inTrick ? Math.max(0, Math.sin(trickPh / 1.4 * Math.PI)) * 0.045 * lS : 0), Math.sin(lap) * skR);
-          pk.rotation.y = -lap + Math.PI / 2 + (inTrick ? trickPh / 1.4 * Math.PI * 4 : 0);
-          pk.rotation.z = inTrick ? Math.sin(trickPh * 10) * 0.25 : Math.sin(lap * 2) * 0.1;
-          wingL.rotation.z = 0.6 + (inTrick ? Math.sin(trickPh * 14) * 0.6 : Math.sin(t * 4) * 0.2);
-          wingR.rotation.z = -0.6 - (inTrick ? Math.sin(trickPh * 14 + 1) * 0.6 : Math.sin(t * 4 + 1) * 0.2);
+          const lap = t * 0.6, trickPhase = t % trickEvery, inTrick = trickPhase < 1.4;
+          skater.position.set(Math.cos(lap) * skateRadius, 0.003 * lakeScale + (inTrick ? Math.max(0, Math.sin(trickPhase / 1.4 * Math.PI)) * 0.045 * lakeScale : 0), Math.sin(lap) * skateRadius);
+          skater.rotation.y = -lap + Math.PI / 2 + (inTrick ? trickPhase / 1.4 * Math.PI * 4 : 0);   // spins twice during a trick
+          skater.rotation.z = inTrick ? Math.sin(trickPhase * 10) * 0.25 : Math.sin(lap * 2) * 0.1;
+          wingLeft.rotation.z = 0.6 + (inTrick ? Math.sin(trickPhase * 14) * 0.6 : Math.sin(t * 4) * 0.2);
+          wingRight.rotation.z = -0.6 - (inTrick ? Math.sin(trickPhase * 14 + 1) * 0.6 : Math.sin(t * 4 + 1) * 0.2);
         });
       }
     }
   }
 
   /* ================================================================= AGES ================================================================= */
-  let AGE = 'steam';
-  const ageGroups = { modern: new T.Group(), space: new T.Group(), both: new T.Group() };     // things that only exist in later ages
-  Object.values(ageGroups).forEach(g => { g.visible = false; planetGroup.add(g); });
-  const tangentFrame = n => { const u = new T.Vector3().crossVectors(n, Math.abs(n.y) > 0.95 ? new T.Vector3(1, 0, 0) : UP).normalize(); return [u, new T.Vector3().crossVectors(u, n)]; };
-  const placeAt = (obj, n, r, spin) => { placeOnSurface(obj, n, r, spin || 0); return obj; };
-  const shell = (geo, color, s) => withInk(new T.Mesh(geo, toon(color)), s || 1.1);
+  let AGE = 'steam';          // the current age: 'stone' | 'steam' | 'modern' | 'space'
+  const ageGroups = { modern: new T.Group(), space: new T.Group(), both: new T.Group() };     // things that only exist in later ages ('both' = modern and space)
+  Object.values(ageGroups).forEach(group => { group.visible = false; planetGroup.add(group); });
+  // Two perpendicular unit vectors lying on the planet's surface at direction `n`.
+  const tangentFrame = n => {
+    const east = new T.Vector3().crossVectors(n, Math.abs(n.y) > 0.95 ? new T.Vector3(1, 0, 0) : UP).normalize();
+    return [east, new T.Vector3().crossVectors(east, n)];
+  };
+  // placeOnSurface() that returns the object (so it can be used in an expression).
+  const placeAt = (object, n, radius, spin) => { placeOnSurface(object, n, radius, spin || 0); return object; };
+  // A cartoon mesh with a black outline: geometry, colour, outline scale (default 1.1).
+  const shell = (geometry, color, outlineScale) => withInk(new T.Mesh(geometry, toon(color)), outlineScale || 1.1);
 
   /* --- stone-age canoes and modern container ships (the sailing ships are the steam age) --- */
+  // A dugout canoe with two paddlers.
   function makeCanoe() {
-    const g = new T.Group();
-    g.add(shell(new T.SphereGeometry(0.01, 12, 6, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2).scale(4, 1.2, 1).translate(0, 0.012, 0), 0x8a5a2f, 1.15));
-    for (const x of [-0.018, 0.012]) { g.add(new T.Mesh(new T.SphereGeometry(0.004, 8, 6).translate(x, 0.017, 0), toon(0xc98a5a))); g.add(new T.Mesh(new T.BoxGeometry(0.002, 0.002, 0.022).rotateX(0.5).translate(x + 0.004, 0.016, 0), toon(0x5a3a22))); }
-    return g;
+    const canoe = new T.Group();
+    canoe.add(shell(new T.SphereGeometry(0.01, 12, 6, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2).scale(4, 1.2, 1).translate(0, 0.012, 0), 0x8a5a2f, 1.15));
+    for (const x of [-0.018, 0.012]) {
+      canoe.add(new T.Mesh(new T.SphereGeometry(0.004, 8, 6).translate(x, 0.017, 0), toon(0xc98a5a)));                                    // a paddler's head
+      canoe.add(new T.Mesh(new T.BoxGeometry(0.002, 0.002, 0.022).rotateX(0.5).translate(x + 0.004, 0.016, 0), toon(0x5a3a22)));           // and paddle
+    }
+    return canoe;
   }
+  // A container ship in hull colour `col`: red deck, stacks of coloured containers, a white bridge, a funnel and a foamy wake.
   function makeContainerShip(col) {
-    const g = new T.Group(), L = 0.12;
-    const hs = new T.Shape(); hs.moveTo(-L / 2, 0.016); hs.lineTo(-L / 2 + 0.006, 0); hs.lineTo(L / 2 - 0.016, 0); hs.quadraticCurveTo(L / 2, 0.004, L / 2 + 0.006, 0.018); hs.lineTo(-L / 2, 0.016);
-    g.add(shell(new T.ExtrudeGeometry(hs, { depth: 0.024, bevelEnabled: false }).translate(0, 0, -0.012), col, 1.06));
-    g.add(new T.Mesh(new T.BoxGeometry(L - 0.004, 0.003, 0.0242).translate(-0.002, 0.0045, 0), toon(0xc0392b)));
-    const cc = [0xff6b6b, 0x3d6fa8, 0xffd23f, 0x2f8a4a, 0xff9f43, 0x9b7bff, 0xffffff];
-    let k = 0;
-    for (let x = -0.03; x < 0.04; x += 0.0132) for (let y = 0; y < 3; y++) for (const z of [-0.0062, 0.0062]) if ((k++ * 7) % 11 !== 0 || y === 0)
-      g.add(withInk(new T.Mesh(new T.BoxGeometry(0.0122, 0.0058, 0.0115).translate(x, 0.0195 + y * 0.006, z), toon(cc[(k * 5 + y) % cc.length])), 1.05));
-    g.add(shell(new T.BoxGeometry(0.012, 0.02, 0.022).translate(-0.047, 0.026, 0), 0xffffff, 1.08));
-    g.add(new T.Mesh(new T.BoxGeometry(0.0125, 0.003, 0.0225).translate(-0.047, 0.031, 0), toon(0x2a3a5a)));
-    g.add(shell(new T.CylinderGeometry(0.0025, 0.003, 0.012, 8).translate(-0.052, 0.04, 0), 0xff4d4d));
-    const wake = new T.Mesh(mergeParts([[-0.075, 0.009], [-0.095, 0.007], [-0.112, 0.005]].map(([x, r]) => [new T.CircleGeometry(r, 14).rotateX(-Math.PI / 2).translate(x, 0.002, 0), new T.Color(1, 1, 1)])), new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, depthWrite: false, side: T.DoubleSide }));
-    g.add(wake);
-    return g;
+    const ship = new T.Group(), length = 0.12;
+    const hullShape = new T.Shape();
+    hullShape.moveTo(-length / 2, 0.016);
+    hullShape.lineTo(-length / 2 + 0.006, 0);
+    hullShape.lineTo(length / 2 - 0.016, 0);
+    hullShape.quadraticCurveTo(length / 2, 0.004, length / 2 + 0.006, 0.018);
+    hullShape.lineTo(-length / 2, 0.016);
+    ship.add(shell(new T.ExtrudeGeometry(hullShape, { depth: 0.024, bevelEnabled: false }).translate(0, 0, -0.012), col, 1.06));
+    ship.add(new T.Mesh(new T.BoxGeometry(length - 0.004, 0.003, 0.0242).translate(-0.002, 0.0045, 0), toon(0xc0392b)));
+    const containerColors = [0xff6b6b, 0x3d6fa8, 0xffd23f, 0x2f8a4a, 0xff9f43, 0x9b7bff, 0xffffff];
+    let containerCount = 0;
+    for (let x = -0.03; x < 0.04; x += 0.0132) for (let level = 0; level < 3; level++) for (const z of [-0.0062, 0.0062]) {
+      if ((containerCount++ * 7) % 11 !== 0 || level === 0) {     // skip a few of the upper containers so the stacks look uneven
+        ship.add(withInk(new T.Mesh(new T.BoxGeometry(0.0122, 0.0058, 0.0115).translate(x, 0.0195 + level * 0.006, z), toon(containerColors[(containerCount * 5 + level) % containerColors.length])), 1.05));
+      }
+    }
+    ship.add(shell(new T.BoxGeometry(0.012, 0.02, 0.022).translate(-0.047, 0.026, 0), 0xffffff, 1.08));                // the bridge
+    ship.add(new T.Mesh(new T.BoxGeometry(0.0125, 0.003, 0.0225).translate(-0.047, 0.031, 0), toon(0x2a3a5a)));
+    ship.add(shell(new T.CylinderGeometry(0.0025, 0.003, 0.012, 8).translate(-0.052, 0.04, 0), 0xff4d4d));             // the funnel
+    const wake = new T.Mesh(mergeParts([[-0.075, 0.009], [-0.095, 0.007], [-0.112, 0.005]].map(([x, radius]) => [new T.CircleGeometry(radius, 14).rotateX(-Math.PI / 2).translate(x, 0.002, 0), new T.Color(1, 1, 1)])), new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, depthWrite: false, side: T.DoubleSide }));
+    ship.add(wake);
+    return ship;
   }
   /* --- fast, slick trains for the modern and space ages --- */
+  // A four-car bullet train with body stripes in colours c1 and c2. Returns units like makeTrain(): { piv, cx, half }.
   function makeBulletTrain(c1, c2) {
-    const units = [], N = 4, len = 0.033;
-    for (let i = 0; i < N; i++) {
-      const cx = 0.05 - i * (len + 0.0015), g = new T.Group(), nose = i === 0, tail = i === N - 1;
-      const body = new T.Mesh(new T.BoxGeometry(len - (nose ? 0.012 : 0), 0.011, 0.012).translate(nose ? -0.006 : 0, 0.0115, 0), toon(0xf6f8fb)); g.add(withInk(body, 1.06));
-      if (nose) { const n2 = new T.Mesh(new T.SphereGeometry(0.0062, 12, 8).scale(2.6, 0.95, 1).translate(len / 2 - 0.013, 0.011, 0), toon(0xf6f8fb)); g.add(withInk(n2, 1.08)); g.add(new T.Mesh(new T.SphereGeometry(0.0045, 10, 6).scale(1.9, 0.6, 1.05).translate(len / 2 - 0.01, 0.0145, 0), toon(0x22324a))); }
-      if (tail) g.add(new T.Mesh(new T.SphereGeometry(0.006, 10, 6).scale(1.2, 0.9, 1).translate(-len / 2 + 0.002, 0.011, 0), toon(0xf6f8fb)));
-      g.add(new T.Mesh(new T.BoxGeometry(len - (nose ? 0.012 : 0) + 0.0005, 0.0018, 0.0123).translate(nose ? -0.006 : 0, 0.0085, 0), toon(c1)));
-      g.add(new T.Mesh(new T.BoxGeometry(len - (nose ? 0.014 : 0.004), 0.0028, 0.0122).translate(nose ? -0.007 : 0, 0.0135, 0), toon(0x2a3a5a)));
-      g.add(new T.Mesh(new T.BoxGeometry(len - 0.004, 0.004, 0.009).translate(0, 0.004, 0), toon(0x3a3f48)));
-      g.add(new T.Mesh(new T.BoxGeometry(len * 0.8, 0.0012, 0.0122).translate(0, 0.017, 0), toon(c2)));
-      const bk = makeBaker(); bk.add(g); const out = new T.Group(); bk.finish(out); out.position.x = -cx;
-      const piv = new T.Group(); piv.add(out); units.push({ piv, cx, half: len / 2 });
+    const units = [], carCount = 4, carLength = 0.033;
+    for (let i = 0; i < carCount; i++) {
+      const cx = 0.05 - i * (carLength + 0.0015), group = new T.Group(), isNose = i === 0, isTail = i === carCount - 1;
+      const body = new T.Mesh(new T.BoxGeometry(carLength - (isNose ? 0.012 : 0), 0.011, 0.012).translate(isNose ? -0.006 : 0, 0.0115, 0), toon(0xf6f8fb));
+      group.add(withInk(body, 1.06));
+      if (isNose) {                                           // the first car gets a long pointed nose and a windscreen
+        const nose = new T.Mesh(new T.SphereGeometry(0.0062, 12, 8).scale(2.6, 0.95, 1).translate(carLength / 2 - 0.013, 0.011, 0), toon(0xf6f8fb));
+        group.add(withInk(nose, 1.08));
+        group.add(new T.Mesh(new T.SphereGeometry(0.0045, 10, 6).scale(1.9, 0.6, 1.05).translate(carLength / 2 - 0.01, 0.0145, 0), toon(0x22324a)));
+      }
+      if (isTail) group.add(new T.Mesh(new T.SphereGeometry(0.006, 10, 6).scale(1.2, 0.9, 1).translate(-carLength / 2 + 0.002, 0.011, 0), toon(0xf6f8fb)));   // rounded tail
+      group.add(new T.Mesh(new T.BoxGeometry(carLength - (isNose ? 0.012 : 0) + 0.0005, 0.0018, 0.0123).translate(isNose ? -0.006 : 0, 0.0085, 0), toon(c1)));   // side stripe
+      group.add(new T.Mesh(new T.BoxGeometry(carLength - (isNose ? 0.014 : 0.004), 0.0028, 0.0122).translate(isNose ? -0.007 : 0, 0.0135, 0), toon(0x2a3a5a)));   // window band
+      group.add(new T.Mesh(new T.BoxGeometry(carLength - 0.004, 0.004, 0.009).translate(0, 0.004, 0), toon(0x3a3f48)));                                          // undercarriage
+      group.add(new T.Mesh(new T.BoxGeometry(carLength * 0.8, 0.0012, 0.0122).translate(0, 0.017, 0), toon(c2)));                                               // roof stripe
+      const baker = makeBaker();
+      baker.add(group);
+      const merged = new T.Group();
+      baker.finish(merged);
+      merged.position.x = -cx;
+      const pivot = new T.Group();
+      pivot.add(merged);
+      units.push({ piv: pivot, cx, half: carLength / 2 });
     }
     return units;
   }
   const trains = boats.filter(b => b.rail), ships = boats.filter(b => !b.rail);
-  ships.forEach((b, i) => { b.models = { steam: b.g.children[0] }; b.hullCol = [0x2a3a5a, 0x8a2a2a, 0x2a6a4a, 0x3a3a3a][i % 4]; });
-  trains.forEach((b, i) => { b.unitsBy = { steam: b.units }; b.speed0 = b.speed; });
+  // Remember each ship's sailing-ship model (models) and the hull colour for its future container-ship model, and each train's steam units and speed.
+  ships.forEach((ship, i) => { ship.models = { steam: ship.g.children[0] }; ship.hullCol = [0x2a3a5a, 0x8a2a2a, 0x2a6a4a, 0x3a3a3a][i % 4]; });
+  trains.forEach(train => { train.unitsBy = { steam: train.units }; train.speed0 = train.speed; });
+  // Swaps the ships and trains to suit the age: canoes in the stone age, sailing ships and steam trains in the steam age,
+  // container ships and bullet trains (2.4x faster) after that. Models are made the first time they are needed.
   function setVehicles(age) {
-    for (const b of ships) {
+    for (const ship of ships) {
       const key = age === 'stone' ? 'stone' : age === 'steam' ? 'steam' : 'modern';
-      if (!b.models[key]) { const m = key === 'stone' ? makeCanoe() : makeContainerShip(b.hullCol); m.scale.setScalar(K * 1.15); b.g.add(m); b.models[key] = m; }
-      for (const k in b.models) b.models[k].visible = k === key;
+      if (!ship.models[key]) {
+        const model = key === 'stone' ? makeCanoe() : makeContainerShip(ship.hullCol);
+        model.scale.setScalar(K * 1.15);
+        ship.g.add(model);
+        ship.models[key] = model;
+      }
+      for (const modelKey in ship.models) ship.models[modelKey].visible = modelKey === key;
     }
-    trains.forEach((b, i) => {
-      const key = age === 'stone' ? null : age === 'steam' ? 'steam' : 'fast';
-      if (key === 'fast' && !b.unitsBy.fast) { b.unitsBy.fast = makeBulletTrain([0x2f6fb0, 0xc0392b, 0x2e8b57, 0x7a4fb0][i % 4], [0xffd23f, 0x4ecdc4, 0xff9ff3, 0xff9f43][i % 4]); b.unitsBy.fast.forEach(u => { u.piv.scale.setScalar(K * 1.05); planetGroup.add(u.piv); }); }
-      for (const k in b.unitsBy) b.unitsBy[k].forEach(u => { u.piv.visible = k === key; });
-      if (key) b.units = b.unitsBy[key];
-      b.speed = b.speed0 * (key === 'fast' ? 2.4 : 1); b.off = 0;
-      b.g.visible = !!key; b.g.children.forEach(o => { if (o.userData.kind) o.userData.off = !key; });
+    trains.forEach((train, i) => {
+      const key = age === 'stone' ? null : age === 'steam' ? 'steam' : 'fast';      // no trains in the stone age
+      if (key === 'fast' && !train.unitsBy.fast) {
+        train.unitsBy.fast = makeBulletTrain([0x2f6fb0, 0xc0392b, 0x2e8b57, 0x7a4fb0][i % 4], [0xffd23f, 0x4ecdc4, 0xff9ff3, 0xff9f43][i % 4]);
+        train.unitsBy.fast.forEach(unit => { unit.piv.scale.setScalar(K * 1.05); planetGroup.add(unit.piv); });
+      }
+      for (const unitKey in train.unitsBy) train.unitsBy[unitKey].forEach(unit => { unit.piv.visible = unitKey === key; });
+      if (key) train.units = train.unitsBy[key];
+      train.speed = train.speed0 * (key === 'fast' ? 2.4 : 1);
+      train.off = 0;
+      train.g.visible = !!key;
+      train.g.children.forEach(child => { if (child.userData.kind) child.userData.off = !key; });     // the click area is switched off when there is no train
     });
     if (rail.trackMesh) rail.trackMesh.visible = age !== 'stone';
   }
@@ -2876,30 +2950,51 @@ function build() {
   /* --- wind turbines (modern and space ages) --- */
   const turbines = [];
   {
-    const far = n => cities.every(c => angle(n, c.n) > c.Ru * AGE_R.space * TOWN_S * 1.15) && avoidN.every(([m, r]) => angle(n, m) > r + 0.02);
+    // A spot is "far" if it is clear of every city (at its biggest) and of the volcanoes and mountains.
+    const far = n => cities.every(city => angle(n, city.n) > city.Ru * AGE_R.space * TOWN_S * 1.15) && avoidN.every(([avoidDirection, avoidRadius]) => angle(n, avoidDirection) > avoidRadius + 0.02);
     const sites = cand.filter(c => c.b !== 'ice' && Math.abs(c.d[1]) < 0.7 && c.h < 0.45 && far(c.n));
+    // Choose up to 12 wind farm sites, at least 0.35 radians apart.
     const farms = [];
-    for (const c of sites) { if (farms.length >= 12) break; if (farms.some(f => angle(f.n, c.n) < 0.35)) continue; farms.push(c); }
-    const tw = makeBaker(), U = TOWN_S;
-    for (const f of farms) {
-      const [u, w] = tangentFrame(f.n);
-      for (let k = 0; k < 4; k++) {
-        const n = f.n.clone().addScaledVector(u, (k % 2 - 0.5) * 0.028 + (rng() - 0.5) * 0.006).addScaledVector(w, (Math.floor(k / 2) - 0.5) * 0.028).normalize();
+    for (const site of sites) {
+      if (farms.length >= 12) break;
+      if (farms.some(farm => angle(farm.n, site.n) < 0.35)) continue;
+      farms.push(site);
+    }
+    const towerBaker = makeBaker(), U = TOWN_S;
+    for (const farm of farms) {
+      const [axisA, axisB] = tangentFrame(farm.n);
+      for (let k = 0; k < 4; k++) {                       // four turbines per farm, on a slightly wobbly 2 x 2 grid
+        const n = farm.n.clone().addScaledVector(axisA, (k % 2 - 0.5) * 0.028 + (rng() - 0.5) * 0.006).addScaledVector(axisB, (Math.floor(k / 2) - 0.5) * 0.028).normalize();
         if (!P.isLand([n.x, n.y, n.z]) || !far(n)) continue;
-        const g = new T.Group();
-        g.add(shell(new T.CylinderGeometry(0.09 * U, 0.17 * U, 4.2 * U, 10).translate(0, 2.1 * U, 0), 0xf4f6f8, 1.12));
-        g.add(shell(new T.BoxGeometry(0.55 * U, 0.3 * U, 0.3 * U).translate(-0.1 * U, 4.25 * U, 0), 0xf4f6f8, 1.1));
-        placeAt(g, n, 0.999, rng() * 6.28); tw.add(g);
+        const tower = new T.Group();
+        tower.add(shell(new T.CylinderGeometry(0.09 * U, 0.17 * U, 4.2 * U, 10).translate(0, 2.1 * U, 0), 0xf4f6f8, 1.12));     // the mast
+        tower.add(shell(new T.BoxGeometry(0.55 * U, 0.3 * U, 0.3 * U).translate(-0.1 * U, 4.25 * U, 0), 0xf4f6f8, 1.1));        // the nacelle on top
+        placeAt(tower, n, 0.999, rng() * 6.28);
+        towerBaker.add(tower);                            // masts are static, so they are merged into one mesh
+        // The rotor spins, so it is kept separate: a hub with three blades.
         const rotor = new T.Group(), hub = new T.Group();
         hub.add(shell(new T.SphereGeometry(0.16 * U, 10, 8), 0xffffff, 1.1));
-        for (let b = 0; b < 3; b++) { const bl = shell(new T.BoxGeometry(0.16 * U, 2.1 * U, 0.04 * U).translate(0, 1.05 * U, 0), 0xffffff, 1.08); bl.rotation.z = b * 2.094; hub.add(bl); }
-        hub.position.set(0.2 * U, 4.25 * U, 0); hub.rotation.y = Math.PI / 2; rotor.add(hub);
-        placeAt(rotor, n, 0.999, g.rotation.y); rotor.quaternion.copy(g.quaternion);
-        ageGroups.both.add(rotor); turbines.push({ hub, sp: 1.6 + rng() * 0.8, ph: rng() * 6 });
+        for (let blade = 0; blade < 3; blade++) {
+          const bladeMesh = shell(new T.BoxGeometry(0.16 * U, 2.1 * U, 0.04 * U).translate(0, 1.05 * U, 0), 0xffffff, 1.08);
+          bladeMesh.rotation.z = blade * 2.094;
+          hub.add(bladeMesh);
+        }
+        hub.position.set(0.2 * U, 4.25 * U, 0);
+        hub.rotation.y = Math.PI / 2;
+        rotor.add(hub);
+        placeAt(rotor, n, 0.999, tower.rotation.y);
+        rotor.quaternion.copy(tower.quaternion);
+        ageGroups.both.add(rotor);
+        turbines.push({ hub, sp: 1.6 + rng() * 0.8, ph: rng() * 6 });      // spin speed and starting angle
       }
     }
-    const tg = new T.Group(); tw.finish(tg); ageGroups.both.add(tg);
-    tickers.push((t) => { if (!ageGroups.both.visible) return; for (const tb of turbines) tb.hub.rotation.z = -(t * tb.sp + tb.ph); });
+    const towerGroup = new T.Group();
+    towerBaker.finish(towerGroup);
+    ageGroups.both.add(towerGroup);
+    tickers.push((t) => {
+      if (!ageGroups.both.visible) return;                // only spin them when they can be seen
+      for (const turbine of turbines) turbine.hub.rotation.z = -(t * turbine.sp + turbine.ph);
+    });
   }
 
   /* --- satellites: a few in the modern age, lots in the space age, plus any you launch --- */
