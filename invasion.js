@@ -742,8 +742,20 @@ body.invading #invAlert{opacity:1}
       }],
     ];
     // Progress through the show: next SCRIPT entry, phase ('attack' or 'retreat'), whether we have finished,
-    // whether all aliens are gone, and the countdown (seconds) until the victory screen.
-    let scriptIndex = 0, phase = 'attack', done = false, aliensDefeated = false, victoryCountdown = Infinity;
+    // and whether all aliens are gone.
+    let scriptIndex = 0, phase = 'attack', done = false, aliensDefeated = false;
+    // The escaping-saucer camera cutscene that ends the show (see beginEscapeCam below): which saucer the camera
+    // is following, which leg of the cutscene we are on ('out' | 'hold' | 'back' | null), how long we've been on
+    // it, a short pause before it starts, and the camera distance it started the final leg from.
+    let heroSaucer = null, escapePhase = null, escapeT = 0, escapeCountdown = Infinity, camBackStart = 0, camEscapeStart = 0;
+    // Hands the camera over to the escape cutscene: turns off orbit controls (so a stray drag can't fight the
+    // animation) and remembers how far out the camera already was, so the pull-back starts from there.
+    function beginEscapeCam() {
+      ctx.controls.enabled = false;
+      camEscapeStart = camera.position.length();
+      escapePhase = 'out';
+      escapeT = 0;
+    }
 
     /* ---------- the main loop ---------- */
     let lastInputTime = performance.now(), autoCameraCooldown = 0;
@@ -898,18 +910,45 @@ body.invading #invAlert{opacity:1}
           }
         }
       }
-      // Once every alien is back aboard during the retreat: jets head home, saucers flee, victory in 3.5 s.
+      // Once every alien is back aboard during the retreat: jets head home, saucers flee, then (after a short
+      // pause so the last saucer is actually airborne) the camera takes over for the escape cutscene below.
       if (!aliensDefeated && phase === 'retreat' && aliens.length && aliens.every(alien => alien.state === 'home')) {
         aliensDefeated = true;
         for (const jet of jets) jet.leaving = true;
         landed = null;
         caption('The last saucer is escaping! Bye bye, aliens! 👋', true);
         for (const saucer of saucers) if (saucer.state !== 'gone' && saucer.state !== 'crash') { saucer.state = 'flee'; saucer.t = 0; }
-        victoryCountdown = 3.5;
+        heroSaucer = saucers.find(saucer => saucer.state === 'flee') || null;
+        escapeCountdown = 1.2;
       }
-      if (victoryCountdown !== Infinity) {
-        victoryCountdown -= dt;
-        if (victoryCountdown <= 0) { victoryCountdown = Infinity; victory(); }
+      if (escapeCountdown !== Infinity) {
+        escapeCountdown -= dt;
+        if (escapeCountdown <= 0) { escapeCountdown = Infinity; beginEscapeCam(); }
+      }
+      // The escape cutscene: the camera (not the user) follows the fleeing saucer's direction from the planet's
+      // centre, pulling back until the planet is small and the wormhole/black hole can appear behind it, holds
+      // there a moment, then eases back in to a normal viewing distance before the victory party starts.
+      if (escapePhase) {
+        escapeT += dt;
+        const direction = tmpA.copy(heroSaucer ? heroSaucer.n : camera.position).normalize();
+        if (escapePhase === 'out') {
+          const OUT_DURATION = 4.5, OUT_DISTANCE = 9;   // not literally 15% of the screen (that needs ~18 units at this FOV), but a strong, clearly dramatic pull-back
+          const progress = Math.min(1, escapeT / OUT_DURATION), eased = progress * progress * (3 - 2 * progress);
+          const distance = camEscapeStart + (OUT_DISTANCE - camEscapeStart) * eased;
+          camera.position.copy(direction).multiplyScalar(distance);
+          camera.lookAt(0, 0, 0);
+          if (progress >= 1) { if (ctx.onAliensGone) ctx.onAliensGone(direction.clone()); escapePhase = 'hold'; escapeT = 0; }
+        } else if (escapePhase === 'hold') {
+          camera.position.copy(direction).multiplyScalar(9);
+          camera.lookAt(0, 0, 0);
+          if (escapeT > 1.8) { escapePhase = 'back'; escapeT = 0; camBackStart = camera.position.length(); }
+        } else if (escapePhase === 'back') {
+          const BACK_DURATION = 2.2, BACK_DISTANCE = 3;
+          const progress = Math.min(1, escapeT / BACK_DURATION), eased = progress * progress * (3 - 2 * progress);
+          camera.position.copy(direction).multiplyScalar(camBackStart + (BACK_DISTANCE - camBackStart) * eased);
+          camera.lookAt(0, 0, 0);
+          if (progress >= 1) { escapePhase = null; ctx.controls.enabled = true; victory(); }
+        }
       }
 
       // ---- jets ----
@@ -1026,8 +1065,9 @@ body.invading #invAlert{opacity:1}
       ctx.canvas.style.transform = shake > 0.01 ? `translate(${(Math.random() - 0.5) * 18 * shake}px,${(Math.random() - 0.5) * 18 * shake}px)` : '';
 
       // ---- automatic camera: after 20 s without a touch, go to wherever the most is happening ----
+      // (skipped during the escape cutscene above, which is already driving the camera itself)
       autoCameraCooldown -= dt;
-      if (performance.now() - lastInputTime > 20000 && autoCameraCooldown <= 0) {
+      if (!escapePhase && performance.now() - lastInputTime > 20000 && autoCameraCooldown <= 0) {
         autoCameraCooldown = 7;
         let bestEvent = null, bestWeight = 0;
         for (const event of events) {                                       // pick the recent event with the most other events near it
@@ -1123,6 +1163,7 @@ body.invading #invAlert{opacity:1}
     // resets the nugget mountain, and tells index.html we are finished.
     function end() {
       done = true;
+      ctx.controls.enabled = true;   // in case we are ending mid-cutscene (e.g. a test calling skipTo), hand the camera back
       const tickerIndex = ctx.tickers.indexOf(tick);
       if (tickerIndex >= 0) ctx.tickers.splice(tickerIndex, 1);
       for (const eventName of ['pointerdown', 'wheel', 'keydown', 'touchstart']) removeEventListener(eventName, noteUserInput);
