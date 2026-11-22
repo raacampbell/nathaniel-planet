@@ -20,3 +20,6 @@
 
 ## Changes
 It is possible I edit this file or the README manually. You should re-read them before editing them just in case. Otherwise my changes may be over-written. 
+
+## Alias
+I have `mv` and `rm` aliased so you will need `-f`.
