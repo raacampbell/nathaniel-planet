@@ -1,9 +1,11 @@
 /* Builds planet textures off the main thread: a quick low-res pass first, then the full-res one. */
 importScripts('planet-gen.js');
-onmessage = function (e) {
-  const P = PlanetGen.createPlanet(e.data.seed);
-  for (const W of e.data.sizes) {
-    const t = P.buildTexture(W, W / 2);
-    postMessage({ W, H: W / 2, data: t.data, mask: t.mask }, [t.data.buffer, t.mask.buffer]);
+
+// Message in: { seed, sizes: [texture widths] }. One message back per size: { W, H, data, mask }.
+onmessage = function (event) {
+  const planet = PlanetGen.createPlanet(event.data.seed);
+  for (const width of event.data.sizes) {
+    const texture = planet.buildTexture(width, width / 2);
+    postMessage({ W: width, H: width / 2, data: texture.data, mask: texture.mask }, [texture.data.buffer, texture.mask.buffer]);
   }
 };

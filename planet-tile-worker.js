@@ -1,46 +1,128 @@
 /* Draws high-detail ground tiles off the main thread (see planet-tile.js), and the political-map overlay. */
 importScripts('planet-gen.js', 'planet-tile.js');
-let P = null, N = null, seed = null;
-const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-function political(m) {
-  const { W, H, GW, GH, ids, cols } = m, Hw = W >> 1, Hh = H >> 1, hs = new Float32Array(Hw * Hh);
-  for (let j = 0; j < Hh; j++) for (let i = 0; i < Hw; i++) { const d = P.dirFromUV((i + 0.5) / Hw, (j + 0.5) / Hh); hs[j * Hw + i] = P.heightAt(d[0], d[1], d[2]); }
+
+let planet = null, noiseGen = null, currentSeed = null;
+
+const smooth = (edgeLow, edgeHigh, x) => {   // 0 below edgeLow, 1 above edgeHigh, smooth ramp between
+  const t = Math.min(1, Math.max(0, (x - edgeLow) / (edgeHigh - edgeLow)));
+  return t * t * (3 - 2 * t);
+};
+
+/* Paints the country-colour overlay for the political map. The countries come in as a coarse grid
+   (message.ids: a country number per cell, -1 for none; message.cols: the colour of each country).
+   Returns RGBA pixels, width x height, transparent over the sea, with soft fills and dark borders on land. */
+function political(message) {
+  const { W: width, H: height, GW: gridWidth, GH: gridHeight, ids, cols } = message;
+  const halfWidth = width >> 1, halfHeight = height >> 1;
+
+  // Land/sea test: the height field on a half-resolution grid.
+  const halfResHeights = new Float32Array(halfWidth * halfHeight);
+  for (let row = 0; row < halfHeight; row++) {
+    for (let col = 0; col < halfWidth; col++) {
+      const dir = planet.dirFromUV((col + 0.5) / halfWidth, (row + 0.5) / halfHeight);
+      halfResHeights[row * halfWidth + col] = planet.heightAt(dir[0], dir[1], dir[2]);
+    }
+  }
+
   // soften the blocky grid: each cell keeps its three strongest countries after a small gaussian blur
-  const tops = new Int16Array(GW * GH * 3).fill(-1), topw = new Float32Array(GW * GH * 3), tmp = new Map(), RB = 2;
-  for (let j = 0; j < GH; j++) for (let i = 0; i < GW; i++) {
-    tmp.clear();
-    for (let dj = -RB; dj <= RB; dj++) { const jj = j + dj; if (jj < 0 || jj >= GH) continue; for (let di = -RB; di <= RB; di++) { const id = ids[jj * GW + (i + di + GW) % GW]; if (id < 0) continue; const w = Math.exp(-(di * di + dj * dj) / 2.2); tmp.set(id, (tmp.get(id) || 0) + w); } }
-    const arr = [...tmp].sort((a, b) => b[1] - a[1]), k = (j * GW + i) * 3;
-    for (let t = 0; t < 3 && t < arr.length; t++) { tops[k + t] = arr[t][0]; topw[k + t] = arr[t][1]; }
+  const topCountries = new Int16Array(gridWidth * gridHeight * 3).fill(-1);   // country numbers, 3 per cell
+  const topWeights = new Float32Array(gridWidth * gridHeight * 3);            // how strongly each of them reaches the cell
+  const weightByCountry = new Map();
+  const blurRadius = 2;
+  for (let row = 0; row < gridHeight; row++) {
+    for (let col = 0; col < gridWidth; col++) {
+      weightByCountry.clear();
+      for (let dRow = -blurRadius; dRow <= blurRadius; dRow++) {
+        const neighborRow = row + dRow;
+        if (neighborRow < 0 || neighborRow >= gridHeight) continue;
+        for (let dCol = -blurRadius; dCol <= blurRadius; dCol++) {
+          const country = ids[neighborRow * gridWidth + (col + dCol + gridWidth) % gridWidth];
+          if (country < 0) continue;
+          const weight = Math.exp(-(dCol * dCol + dRow * dRow) / 2.2);
+          weightByCountry.set(country, (weightByCountry.get(country) || 0) + weight);
+        }
+      }
+      const ranked = [...weightByCountry].sort((a, b) => b[1] - a[1]);
+      const cellBase = (row * gridWidth + col) * 3;
+      for (let rank = 0; rank < 3 && rank < ranked.length; rank++) {
+        topCountries[cellBase + rank] = ranked[rank][0];
+        topWeights[cellBase + rank] = ranked[rank][1];
+      }
+    }
   }
-  const out = new Uint8ClampedArray(W * H * 4), acc = new Map();
-  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
-    // land? (bilinear height from the half-res grid)
-    const fx = (i + 0.5) / W * Hw - 0.5, fy = (j + 0.5) / H * Hh - 0.5, x0 = Math.floor(fx), y0 = Math.max(0, Math.min(Hh - 2, Math.floor(fy))), tx = fx - x0, ty = Math.min(1, Math.max(0, fy - y0));
-    const xa = (x0 + Hw) % Hw, xb = (x0 + 1) % Hw;
-    const h = (hs[y0 * Hw + xa] * (1 - tx) + hs[y0 * Hw + xb] * tx) * (1 - ty) + (hs[(y0 + 1) * Hw + xa] * (1 - tx) + hs[(y0 + 1) * Hw + xb] * tx) * ty;
-    const land = sm(P.sea - 0.0015, P.sea + 0.0015, h);
-    if (land <= 0) continue;
-    // country membership: bilinear blend of the four surrounding grid cells
-    const gx = (i + 0.5) / W * GW - 0.5, gy = (j + 0.5) / H * GH - 0.5, g0 = Math.floor(gx), h0 = Math.max(0, Math.min(GH - 2, Math.floor(gy))), u = gx - g0, v = Math.min(1, Math.max(0, gy - h0));
-    acc.clear();
-    const add = (ci, cj, w) => { const k = (cj * GW + ((ci + GW) % GW)) * 3; if (w <= 0) return; for (let t = 0; t < 3; t++) { const id = tops[k + t]; if (id < 0) break; acc.set(id, (acc.get(id) || 0) + w * topw[k + t]); } };
-    add(g0, h0, (1 - u) * (1 - v)); add(g0 + 1, h0, u * (1 - v)); add(g0, h0 + 1, (1 - u) * v); add(g0 + 1, h0 + 1, u * v);
-    let b = -1, bw = 0, sw = 0;
-    for (const [id, w] of acc) { if (w > bw) { sw = bw; bw = w; b = id; } else if (w > sw) sw = w; }
-    if (b < 0) continue;
-    const tot = bw + sw || 1, margin = (bw - sw) / tot;            // 1 deep inside, 0 on the border
-    const line = acc.size > 1 ? 1 - sm(0.035, 0.075, margin) : 0, edge = acc.size > 1 ? 1 - sm(0.08, 0.55, margin) : 0;
-    const c = cols[b], q = (j * W + i) * 4;
-    const a = (0.3 + 0.4 * edge) * (1 - line) + 0.9 * line;
-    out[q] = c[0] * (1 - line) + 50 * line; out[q + 1] = c[1] * (1 - line) + 20 * line; out[q + 2] = c[2] * (1 - line) + 70 * line; out[q + 3] = 255 * a * land;
+
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  const weightHere = new Map();   // country number -> weight at the current pixel
+  for (let row = 0; row < height; row++) {
+    for (let col = 0; col < width; col++) {
+      // land? (bilinear height from the half-res grid)
+      const heightX = (col + 0.5) / width * halfWidth - 0.5, heightY = (row + 0.5) / height * halfHeight - 0.5;
+      const x0 = Math.floor(heightX);
+      const y0 = Math.max(0, Math.min(halfHeight - 2, Math.floor(heightY)));
+      const fracX = heightX - x0, fracY = Math.min(1, Math.max(0, heightY - y0));
+      const colA = (x0 + halfWidth) % halfWidth, colB = (x0 + 1) % halfWidth;
+      const groundHeight = (halfResHeights[y0 * halfWidth + colA] * (1 - fracX) + halfResHeights[y0 * halfWidth + colB] * fracX) * (1 - fracY)
+                         + (halfResHeights[(y0 + 1) * halfWidth + colA] * (1 - fracX) + halfResHeights[(y0 + 1) * halfWidth + colB] * fracX) * fracY;
+      const landAmount = smooth(planet.sea - 0.0015, planet.sea + 0.0015, groundHeight);
+      if (landAmount <= 0) continue;
+
+      // country membership: bilinear blend of the four surrounding grid cells
+      const gridX = (col + 0.5) / width * gridWidth - 0.5, gridY = (row + 0.5) / height * gridHeight - 0.5;
+      const gridCol = Math.floor(gridX);
+      const gridRow = Math.max(0, Math.min(gridHeight - 2, Math.floor(gridY)));
+      const blendX = gridX - gridCol, blendY = Math.min(1, Math.max(0, gridY - gridRow));
+      weightHere.clear();
+      const addCell = (cellCol, cellRow, cellWeight) => {
+        const cellBase = (cellRow * gridWidth + ((cellCol + gridWidth) % gridWidth)) * 3;
+        if (cellWeight <= 0) return;
+        for (let rank = 0; rank < 3; rank++) {
+          const country = topCountries[cellBase + rank];
+          if (country < 0) break;
+          weightHere.set(country, (weightHere.get(country) || 0) + cellWeight * topWeights[cellBase + rank]);
+        }
+      };
+      addCell(gridCol, gridRow, (1 - blendX) * (1 - blendY));
+      addCell(gridCol + 1, gridRow, blendX * (1 - blendY));
+      addCell(gridCol, gridRow + 1, (1 - blendX) * blendY);
+      addCell(gridCol + 1, gridRow + 1, blendX * blendY);
+
+      // Find the strongest and second-strongest countries here.
+      let bestCountry = -1, bestWeight = 0, secondWeight = 0;
+      for (const [country, weight] of weightHere) {
+        if (weight > bestWeight) { secondWeight = bestWeight; bestWeight = weight; bestCountry = country; }
+        else if (weight > secondWeight) secondWeight = weight;
+      }
+      if (bestCountry < 0) continue;
+
+      const total = bestWeight + secondWeight || 1;
+      const margin = (bestWeight - secondWeight) / total;            // 1 deep inside, 0 on the border
+      const borderLine = weightHere.size > 1 ? 1 - smooth(0.035, 0.075, margin) : 0;       // the dark border line
+      const nearBorderGlow = weightHere.size > 1 ? 1 - smooth(0.08, 0.55, margin) : 0;      // fill gets stronger near borders
+      const countryColor = cols[bestCountry], offset = (row * width + col) * 4;
+      const alpha = (0.3 + 0.4 * nearBorderGlow) * (1 - borderLine) + 0.9 * borderLine;
+      pixels[offset] = countryColor[0] * (1 - borderLine) + 50 * borderLine;
+      pixels[offset + 1] = countryColor[1] * (1 - borderLine) + 20 * borderLine;
+      pixels[offset + 2] = countryColor[2] * (1 - borderLine) + 70 * borderLine;
+      pixels[offset + 3] = 255 * alpha * landAmount;
+    }
   }
-  return out;
+  return pixels;
 }
-onmessage = e => {
-  const m = e.data;
-  if (seed !== m.seed) { seed = m.seed; P = PlanetGen.createPlanet(seed); N = PlanetGen.makeNoise(seed ^ 0x5bd1e995); }
-  if (m.type === 'political') { const px = political(m); postMessage({ type: 'political', W: m.W, H: m.H, data: px.buffer }, [px.buffer]); return; }
-  const px = PlanetTile.buildTile(P, N, m.n, m.span, m.res);
-  postMessage({ res: m.res, data: px.buffer }, [px.buffer]);
+
+/* Messages in: { type: 'political', ... } for the country overlay, otherwise a tile request
+   { seed, n, span, res } (see planet-tile.js). The answer carries the pixel buffer back. */
+onmessage = event => {
+  const message = event.data;
+  if (currentSeed !== message.seed) {
+    currentSeed = message.seed;
+    planet = PlanetGen.createPlanet(currentSeed);
+    noiseGen = PlanetGen.makeNoise(currentSeed ^ 0x5bd1e995);
+  }
+  if (message.type === 'political') {
+    const pixels = political(message);
+    postMessage({ type: 'political', W: message.W, H: message.H, data: pixels.buffer }, [pixels.buffer]);
+    return;
+  }
+  const pixels = PlanetTile.buildTile(planet, noiseGen, message.n, message.span, message.res);
+  postMessage({ res: message.res, data: pixels.buffer }, [pixels.buffer]);
 };
