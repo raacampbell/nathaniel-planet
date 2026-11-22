@@ -568,153 +568,291 @@ function build() {
   }
 
   /* ---------- land grid (shared by the railway and the ships) ---------- */
+  // The planet cut into a GW x GH grid of cells (like a world map). Per cell we store:
+  //   gDir: its direction on the sphere (x, y, z), gLand: 1 if land, gH: relative height (land only),
+  //   gIce: 1 if ice or far north/south (land only), gOk: spare flag used by later code.
   const GW = 288, GH = 144, GN = GW * GH, SPACING = 0.01;
   const gDir = new Float32Array(GN * 3), gLand = new Uint8Array(GN), gOk = new Uint8Array(GN), gH = new Float32Array(GN), gIce = new Uint8Array(GN);
-  for (let j = 0; j < GH; j++) for (let i = 0; i < GW; i++) {
-    const d = P.dirFromUV((i + 0.5) / GW, (j + 0.5) / GH), k = j * GW + i;
-    gDir.set(d, k * 3); gLand[k] = P.isLand(d) ? 1 : 0;
-    if (gLand[k]) { gH[k] = P.relHeight(d); gIce[k] = (Math.abs(d[1]) > 0.74 || P.biome(d) === 'ice') ? 1 : 0; }
-  }
-  const cellOf = n => {
-    let phi = Math.atan2(n.z, -n.x); if (phi < 0) phi += Math.PI * 2;
-    return Math.min(GH - 1, Math.floor(Math.acos(Math.min(1, Math.max(-1, n.y))) / Math.PI * GH)) * GW + Math.floor(phi / (Math.PI * 2) * GW) % GW;
-  };
-  const cellAng = (a, b) => Math.acos(Math.min(1, Math.max(-1, gDir[a * 3] * gDir[b * 3] + gDir[a * 3 + 1] * gDir[b * 3 + 1] + gDir[a * 3 + 2] * gDir[b * 3 + 2])));
-  const NB = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]];
-  const neighbours = (k, fn) => {
-    const i = k % GW, j = (k / GW) | 0;
-    for (const [di, dj] of NB) { const jj = j + dj; if (jj < 0 || jj >= GH) continue; fn(jj * GW + ((i + di + GW) % GW)); }
-  };
-  const resamplePts = (pts, spacing) => {
-    const out = [pts[0].clone()]; let carry = 0;
-    for (let i = 0; i < pts.length - 1; i++) {
-      const a = pts[i], b = pts[i + 1], seg = Math.acos(Math.min(1, a.dot(b)));
-      if (seg < 1e-9) continue;
-      let pos = spacing - carry;
-      while (pos <= seg) { out.push(a.clone().lerp(b, pos / seg).normalize()); pos += spacing; }
-      carry = seg - (pos - spacing);
+  for (let row = 0; row < GH; row++) for (let col = 0; col < GW; col++) {
+    const dir = P.dirFromUV((col + 0.5) / GW, (row + 0.5) / GH), cell = row * GW + col;
+    gDir.set(dir, cell * 3);
+    gLand[cell] = P.isLand(dir) ? 1 : 0;
+    if (gLand[cell]) {
+      gH[cell] = P.relHeight(dir);
+      gIce[cell] = (Math.abs(dir[1]) > 0.74 || P.biome(dir) === 'ice') ? 1 : 0;
     }
-    out.push(pts[pts.length - 1].clone());
-    return out;
+  }
+  // The grid cell number that contains direction `n` (a unit Vector3).
+  const cellOf = n => {
+    let longitude = Math.atan2(n.z, -n.x);
+    if (longitude < 0) longitude += Math.PI * 2;
+    const row = Math.min(GH - 1, Math.floor(Math.acos(Math.min(1, Math.max(-1, n.y))) / Math.PI * GH));
+    return row * GW + Math.floor(longitude / (Math.PI * 2) * GW) % GW;
+  };
+  // Angle in radians between the centres of two grid cells.
+  const cellAng = (cellA, cellB) => Math.acos(Math.min(1, Math.max(-1,
+    gDir[cellA * 3] * gDir[cellB * 3] + gDir[cellA * 3 + 1] * gDir[cellB * 3 + 1] + gDir[cellA * 3 + 2] * gDir[cellB * 3 + 2])));
+  const NEIGHBOUR_STEPS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]];   // the 8 surrounding cells
+  // Calls callback(cellNumber) for each of the 8 neighbours of `cell` (wrapping round east-west, stopping at the poles).
+  const neighbours = (cell, callback) => {
+    const col = cell % GW, row = (cell / GW) | 0;
+    for (const [dCol, dRow] of NEIGHBOUR_STEPS) {
+      const neighbourRow = row + dRow;
+      if (neighbourRow < 0 || neighbourRow >= GH) continue;
+      callback(neighbourRow * GW + ((col + dCol + GW) % GW));
+    }
+  };
+  // Takes a path of unit vectors and returns a new path along the same line with points exactly `spacing` radians apart.
+  const resamplePts = (points, spacing) => {
+    const resampled = [points[0].clone()];
+    let carry = 0;                                    // distance already walked past the last point placed
+    for (let i = 0; i < points.length - 1; i++) {
+      const from = points[i], to = points[i + 1], segmentLength = Math.acos(Math.min(1, from.dot(to)));
+      if (segmentLength < 1e-9) continue;
+      let position = spacing - carry;
+      while (position <= segmentLength) {
+        resampled.push(from.clone().lerp(to, position / segmentLength).normalize());
+        position += spacing;
+      }
+      carry = segmentLength - (position - spacing);
+    }
+    resampled.push(points[points.length - 1].clone());
+    return resampled;
   };
 
-  // curvature flow: only points whose local turning radius is below Rmin get pulled toward their neighbours
-  const relaxCurves = (pts, spacing, Rmin, iters, ok) => {
-    const k0 = Math.max(1, Math.round(0.02 / spacing)), n = pts.length; let q = pts.map(v => v.clone());
-    const circR = (a, b, c) => { const ab = a.distanceTo(b), bc = b.distanceTo(c), ca = a.distanceTo(c), s = (ab + bc + ca) / 2, ar = Math.sqrt(Math.max(0, s * (s - ab) * (s - bc) * (s - ca))); return ar > 1e-12 ? ab * bc * ca / (4 * ar) : 9; };
-    for (let it = 0; it < iters; it++) {
-      let moved = false; const nq = q.map(v => v.clone());
-      for (let i = 1; i < n - 1; i++) { const k = Math.min(k0, i, n - 1 - i); if (circR(q[i - k], q[i], q[i + k]) < Rmin) { const c = q[i - k].clone().add(q[i + k]).addScaledVector(q[i], 2).normalize(); if (!ok || ok(c)) { nq[i].copy(c); moved = true; } } }
-      q = nq; if (!moved) break;
+  // curvature flow: only points whose local turning radius is below minRadius get pulled toward their neighbours
+  // (iterates up to `iterations` times; `isAllowed(point)` can veto a move, e.g. to stay on land)
+  const relaxCurves = (points, spacing, minRadius, iterations, isAllowed) => {
+    const lookAround = Math.max(1, Math.round(0.02 / spacing)), pointCount = points.length;
+    let current = points.map(v => v.clone());
+    // Radius of the circle through three points.
+    const circleRadius = (a, b, c) => {
+      const ab = a.distanceTo(b), bc = b.distanceTo(c), ca = a.distanceTo(c), halfPerimeter = (ab + bc + ca) / 2;
+      const area = Math.sqrt(Math.max(0, halfPerimeter * (halfPerimeter - ab) * (halfPerimeter - bc) * (halfPerimeter - ca)));
+      return area > 1e-12 ? ab * bc * ca / (4 * area) : 9;
+    };
+    for (let iteration = 0; iteration < iterations; iteration++) {
+      let moved = false;
+      const next = current.map(v => v.clone());
+      for (let i = 1; i < pointCount - 1; i++) {
+        const reach = Math.min(lookAround, i, pointCount - 1 - i);
+        if (circleRadius(current[i - reach], current[i], current[i + reach]) < minRadius) {
+          const pulled = current[i - reach].clone().add(current[i + reach]).addScaledVector(current[i], 2).normalize();
+          if (!isAllowed || isAllowed(pulled)) { next[i].copy(pulled); moved = true; }
+        }
+      }
+      current = next;
+      if (!moved) break;
     }
-    return q;
+    return current;
   };
 
   /* ---------- railway: links the cities of the biggest continent (ice caps excluded) ---------- */
+  // rail.cities: cities on the network; rail.edges: [{ a, b, pts }] track between two cities; rail.samples: points along all track.
   const rail = { cities: [], edges: [], samples: [], trackMesh: null };
   {
-    const comp = new Int32Array(GN).fill(-1), area = [];
-    for (let s = 0; s < GN; s++) {
-      if (!gLand[s] || gIce[s] || comp[s] >= 0) continue;
-      const id = area.length; let a = 0; const st = [s]; comp[s] = id;
-      while (st.length) { const k = st.pop(); a += Math.sqrt(1 - gDir[k * 3 + 1] * gDir[k * 3 + 1]); neighbours(k, q => { if (gLand[q] && !gIce[q] && comp[q] < 0) { comp[q] = id; st.push(q); } }); }
-      area.push(a);
+    // Label every land cell (not ice) with the landmass it belongs to, and measure each landmass's area.
+    const landmassOfCell = new Int32Array(GN).fill(-1), landmassAreas = [];
+    for (let start = 0; start < GN; start++) {
+      if (!gLand[start] || gIce[start] || landmassOfCell[start] >= 0) continue;
+      const landmassId = landmassAreas.length;
+      let area = 0;
+      const stack = [start];
+      landmassOfCell[start] = landmassId;
+      while (stack.length) {                            // flood fill
+        const cell = stack.pop();
+        area += Math.sqrt(1 - gDir[cell * 3 + 1] * gDir[cell * 3 + 1]);                 // cells near the poles are smaller
+        neighbours(cell, next => { if (gLand[next] && !gIce[next] && landmassOfCell[next] < 0) { landmassOfCell[next] = landmassId; stack.push(next); } });
+      }
+      landmassAreas.push(area);
     }
-    const big = area.indexOf(Math.max(...area));
-    const cellFor = c => {
-      const start = cellOf(c.n), seen = new Set([start]); let ring = [start];
+    const bigLandmass = landmassAreas.indexOf(Math.max(...landmassAreas));
+    // The nearest cell of the big landmass to a city (searching outward up to 6 rings), or -1 if none.
+    const cellFor = city => {
+      const start = cellOf(city.n), seen = new Set([start]);
+      let ring = [start];
       for (let r = 0; r < 6 && ring.length; r++) {
-        const nxt = [];
-        for (const k of ring) { if (comp[k] === big) return k; neighbours(k, q => { if (!seen.has(q)) { seen.add(q); nxt.push(q); } }); }
-        ring = nxt;
+        const nextRing = [];
+        for (const cell of ring) {
+          if (landmassOfCell[cell] === bigLandmass) return cell;
+          neighbours(cell, next => { if (!seen.has(next)) { seen.add(next); nextRing.push(next); } });
+        }
+        ring = nextRing;
       }
       return -1;
     };
-    const rc = [];
-    cities.forEach(c => { const k = cellFor(c); if (k >= 0) rc.push({ c, k }); });
-    if (rc.length >= 3) {
+    const railCities = [];       // [{ c: city, k: its grid cell }] for cities on the big landmass
+    cities.forEach(city => { const cell = cellFor(city); if (cell >= 0) railCities.push({ c: city, k: cell }); });
+    if (railCities.length >= 3) {
       // cheapest land route from a source cell (hills cost extra, so the line goes round mountains)
-      const landDij = src => {
-        const dist = new Float64Array(GN).fill(Infinity), prev = new Int32Array(GN).fill(-1), heap = [[0, src]]; dist[src] = 0;
-        const push = (d, k) => { heap.push([d, k]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
-        const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[i], heap[m]] = [heap[m], heap[i]]; i = m; } } return top; };
+      // Dijkstra's algorithm with a small binary heap. Returns { dist, prev }: cost to every cell, and the way back.
+      const landDij = source => {
+        const dist = new Float64Array(GN).fill(Infinity), prev = new Int32Array(GN).fill(-1), heap = [[0, source]];
+        dist[source] = 0;
+        const push = (cost, cell) => {
+          heap.push([cost, cell]);
+          let i = heap.length - 1;
+          while (i > 0) {
+            const parent = (i - 1) >> 1;
+            if (heap[parent][0] <= heap[i][0]) break;
+            [heap[parent], heap[i]] = [heap[i], heap[parent]];
+            i = parent;
+          }
+        };
+        const pop = () => {
+          const top = heap[0], last = heap.pop();
+          if (heap.length) {
+            heap[0] = last;
+            let i = 0;
+            for (;;) {
+              const left = 2 * i + 1, right = left + 1;
+              let smallest = i;
+              if (left < heap.length && heap[left][0] < heap[smallest][0]) smallest = left;
+              if (right < heap.length && heap[right][0] < heap[smallest][0]) smallest = right;
+              if (smallest === i) break;
+              [heap[i], heap[smallest]] = [heap[smallest], heap[i]];
+              i = smallest;
+            }
+          }
+          return top;
+        };
         while (heap.length) {
-          const [d, k] = pop(); if (d > dist[k]) continue;
-          neighbours(k, q => { if (comp[q] !== big) return; const nd = d + cellAng(k, q) * (1 + 3.2 * gH[q]); if (nd < dist[q]) { dist[q] = nd; prev[q] = k; push(nd, q); } });
+          const [cost, cell] = pop();
+          if (cost > dist[cell]) continue;
+          neighbours(cell, next => {
+            if (landmassOfCell[next] !== bigLandmass) return;
+            const newCost = cost + cellAng(cell, next) * (1 + 3.2 * gH[next]);     // steeper = dearer
+            if (newCost < dist[next]) { dist[next] = newCost; prev[next] = cell; push(newCost, next); }
+          });
         }
         return { dist, prev };
       };
-      rc.forEach(r => { r.dj = landDij(r.k); });
-      // minimum spanning tree over true route costs (Prim)
-      const inTree = [0], links = []; const used = new Set([0]);
-      while (inTree.length < rc.length) {
+      railCities.forEach(railCity => { railCity.dj = landDij(railCity.k); });
+      // minimum spanning tree over true route costs (Prim): connect every city to the network by its cheapest link
+      const inTree = [0], links = [];
+      const used = new Set([0]);
+      while (inTree.length < railCities.length) {
         let best = null;
-        for (const i of inTree) for (let j = 0; j < rc.length; j++) { if (used.has(j)) continue; const d = rc[i].dj.dist[rc[j].k]; if (isFinite(d) && (!best || d < best.d)) best = { i, j, d }; }
-        if (!best) break; used.add(best.j); inTree.push(best.j); links.push(best);
+        for (const i of inTree) for (let j = 0; j < railCities.length; j++) {
+          if (used.has(j)) continue;
+          const cost = railCities[i].dj.dist[railCities[j].k];
+          if (isFinite(cost) && (!best || cost < best.d)) best = { i, j, d: cost };
+        }
+        if (!best) break;
+        used.add(best.j);
+        inTree.push(best.j);
+        links.push(best);
       }
-      const landOnly = pts => {
-        for (let i = 0; i < pts.length - 1; i++) for (let k = 0; k < 4; k++) { const q = pts[i].clone().lerp(pts[i + 1], k / 4).normalize(); if (!P.isLand([q.x, q.y, q.z]) || Math.abs(q.y) > 0.76) return false; }
+      // Does the whole path stay on land (and away from the polar caps)?
+      const landOnly = points => {
+        for (let i = 0; i < points.length - 1; i++) for (let k = 0; k < 4; k++) {
+          const sample = points[i].clone().lerp(points[i + 1], k / 4).normalize();
+          if (!P.isLand([sample.x, sample.y, sample.z]) || Math.abs(sample.y) > 0.76) return false;
+        }
         return true;
       };
       const CITY_R = 0.05 * RK;
-      for (const L of links) {
-        const A = rc[L.i], B = rc[L.j], cells = []; for (let k = B.k; k !== -1; k = A.dj.prev[k]) cells.push(k); cells.reverse();
-        const base = [A.c.n.clone(), ...cells.map(k => new T.Vector3(gDir[k * 3], gDir[k * 3 + 1], gDir[k * 3 + 2])), B.c.n.clone()];
-        let pts = base;
-        for (const iters of [60, 36, 22, 12, 6, 2, 0]) {
-          let q = base.map(v => v.clone());
-          for (let it = 0; it < iters; it++) { const nq = q.map(v => v.clone()); for (let i = 1; i < q.length - 1; i++) nq[i].copy(q[i - 1]).add(q[i].clone().multiplyScalar(2)).add(q[i + 1]).normalize(); q = nq; }
-          if (landOnly(q)) { pts = q; break; }
+      for (const link of links) {
+        const cityA = railCities[link.i], cityB = railCities[link.j], cells = [];
+        for (let cell = cityB.k; cell !== -1; cell = cityA.dj.prev[cell]) cells.push(cell);     // walk back from B to A...
+        cells.reverse();                                                                          // ...then turn it round to run A to B
+        const base = [cityA.c.n.clone(), ...cells.map(cell => new T.Vector3(gDir[cell * 3], gDir[cell * 3 + 1], gDir[cell * 3 + 2])), cityB.c.n.clone()];
+        // Smooth the blocky grid route: try heavy smoothing first and fall back to lighter smoothing if it would leave the land.
+        let points = base;
+        for (const iterations of [60, 36, 22, 12, 6, 2, 0]) {
+          let smoothed = base.map(v => v.clone());
+          for (let iteration = 0; iteration < iterations; iteration++) {
+            const next = smoothed.map(v => v.clone());
+            for (let i = 1; i < smoothed.length - 1; i++) next[i].copy(smoothed[i - 1]).add(smoothed[i].clone().multiplyScalar(2)).add(smoothed[i + 1]).normalize();
+            smoothed = next;
+          }
+          if (landOnly(smoothed)) { points = smoothed; break; }
         }
-        let r = resamplePts(pts, 0.004);
+        let route = resamplePts(points, 0.004);
         {   // allow the track to shave a coastline by a hair (beach), but never wander out to sea
-          const u0 = new T.Vector3(), w0 = new T.Vector3(), q0 = new T.Vector3();
-          const okFor = tol => c => {
-            if (Math.abs(c.y) > 0.76) return false; if (P.isLand([c.x, c.y, c.z])) return true;
-            u0.crossVectors(c, Math.abs(c.y) > 0.9 ? new T.Vector3(1, 0, 0) : UP).normalize(); w0.crossVectors(c, u0);
-            for (let k = 0; k < 4; k++) { const th = k * 1.5708; q0.copy(c).addScaledVector(u0, Math.cos(th) * tol).addScaledVector(w0, Math.sin(th) * tol); if (P.isLand([q0.x, q0.y, q0.z])) return true; }
+          const east = new T.Vector3(), north = new T.Vector3(), probe = new T.Vector3();
+          // Returns a test: is point c on land, or within `tolerance` of land (checked in 4 directions)?
+          const okFor = tolerance => c => {
+            if (Math.abs(c.y) > 0.76) return false;
+            if (P.isLand([c.x, c.y, c.z])) return true;
+            east.crossVectors(c, Math.abs(c.y) > 0.9 ? new T.Vector3(1, 0, 0) : UP).normalize();
+            north.crossVectors(c, east);
+            for (let k = 0; k < 4; k++) {
+              const theta = k * 1.5708;
+              probe.copy(c).addScaledVector(east, Math.cos(theta) * tolerance).addScaledVector(north, Math.sin(theta) * tolerance);
+              if (P.isLand([probe.x, probe.y, probe.z])) return true;
+            }
             return false;
           };
-          r = relaxCurves(r, 0.004, 0.085 * RK, 4000, okFor(0.004));
-          r = relaxCurves(r, 0.004, 0.075 * RK, 6000, okFor(0.014));      // stubborn bends: allow a little more beach
+          route = relaxCurves(route, 0.004, 0.085 * RK, 4000, okFor(0.004));
+          route = relaxCurves(route, 0.004, 0.075 * RK, 6000, okFor(0.014));      // stubborn bends: allow a little more beach
         }   // no tight bends for the big trains
-        r = r.filter(p => angle(p, A.c.n) > CITY_R * A.c.Ru / 8 && angle(p, B.c.n) > CITY_R * B.c.Ru / 8);          // stop at the edge of each town square
-        if (r.length < 6) continue;
-        rail.edges.push({ a: A.c, b: B.c, pts: r });
-        for (let i = 0; i < r.length; i += 2) rail.samples.push(r[i]);
+        route = route.filter(p => angle(p, cityA.c.n) > CITY_R * cityA.c.Ru / 8 && angle(p, cityB.c.n) > CITY_R * cityB.c.Ru / 8);          // stop at the edge of each town square
+        if (route.length < 6) continue;
+        rail.edges.push({ a: cityA.c, b: cityB.c, pts: route });
+        for (let i = 0; i < route.length; i += 2) rail.samples.push(route[i]);
       }
-      rail.cities = [...new Set(rail.edges.flatMap(e => [e.a, e.b]))];
+      rail.cities = [...new Set(rail.edges.flatMap(edge => [edge.a, edge.b]))];
     }
     // the track itself: gravel bed with ink edge, two rails and sleepers, merged into one mesh
     if (rail.edges.length) {
-      const pos = [], nor = [], col = [], tmpC = new T.Color();
-      const quad = (a, b, c, d, n, color) => { // a,b,c,d are Vector3 (CCW from outside)
-        for (const p of [a, b, c, a, c, d]) { pos.push(p.x, p.y, p.z); nor.push(n.x, n.y, n.z); tmpC.set(color); col.push(tmpC.r, tmpC.g, tmpC.b); }
+      const positions = [], normals = [], colors = [], tmpColor = new T.Color();
+      // Adds a flat four-cornered patch (two triangles) of the given colour; a, b, c, d are Vector3 (CCW from outside), n is its normal.
+      const quad = (a, b, c, d, n, color) => {
+        for (const corner of [a, b, c, a, c, d]) {
+          positions.push(corner.x, corner.y, corner.z);
+          normals.push(n.x, n.y, n.z);
+          tmpColor.set(color);
+          colors.push(tmpColor.r, tmpColor.g, tmpColor.b);
+        }
       };
-      const _t = new T.Vector3(), _s = new T.Vector3(), _p0 = new T.Vector3(), _p1 = new T.Vector3(), _q = (n, r, s, w) => n.clone().multiplyScalar(r).addScaledVector(s, w * RK);
-      for (const e of rail.edges) {
-        const pts = e.pts, ss = pts.map((p, i) => { const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)]; _t.copy(b).sub(a); _t.addScaledVector(p, -_t.dot(p)).normalize(); return new T.Vector3().crossVectors(p, _t).normalize(); });
-        const ribbon = (r, off, w, color) => { for (let i = 0; i < pts.length - 1; i++) {
-          const a = pts[i], b = pts[i + 1], sa = ss[i], sb = ss[i + 1];
-          quad(_q(a, r, sa, off - w), _q(a, r, sa, off + w), _q(b, r, sb, off + w), _q(b, r, sb, off - w), a, color); } };
+      const tangent = new T.Vector3();
+      // A point at height `r` above the planet's centre, `w` (scaled by RK) to the side of `n` along direction `s`.
+      const sidePoint = (n, r, s, w) => n.clone().multiplyScalar(r).addScaledVector(s, w * RK);
+      for (const edge of rail.edges) {
+        const pts = edge.pts;
+        // For every point, the sideways direction (perpendicular to the track, lying on the ground).
+        const sideways = pts.map((p, i) => {
+          const before = pts[Math.max(0, i - 1)], after = pts[Math.min(pts.length - 1, i + 1)];
+          tangent.copy(after).sub(before);
+          tangent.addScaledVector(p, -tangent.dot(p)).normalize();
+          return new T.Vector3().crossVectors(p, tangent).normalize();
+        });
+        // A strip along the whole track at height r, from offset-w to offset+w (sideways), in the given colour.
+        const ribbon = (r, offset, w, color) => {
+          for (let i = 0; i < pts.length - 1; i++) {
+            const a = pts[i], b = pts[i + 1], sideA = sideways[i], sideB = sideways[i + 1];
+            quad(sidePoint(a, r, sideA, offset - w), sidePoint(a, r, sideA, offset + w), sidePoint(b, r, sideB, offset + w), sidePoint(b, r, sideB, offset - w), a, color);
+          }
+        };
         ribbon(1.0009, 0, 0.0078, 0x2a1a30);          // ink edge
         ribbon(1.0013, 0, 0.0060, 0xcdb48f);          // gravel bed
         ribbon(1.0021, -0.0030, 0.0009, 0x4d5361);    // rails
         ribbon(1.0021, 0.0030, 0.0009, 0x4d5361);
-        for (let i = 0; i < pts.length - 1; i += 1) {   // sleepers
-          const a = pts[i], b = pts[i + 1], sa = ss[i], sb = ss[i + 1], m = a.clone().add(b).normalize(), sm = sa.clone().add(sb).normalize(), len = angle(a, b) * 0.28;
-          const tt = b.clone().sub(a).normalize().multiplyScalar(len);
-          const c1 = m.clone().multiplyScalar(1.0017);
-          quad(c1.clone().addScaledVector(sm, -0.0052 * RK).addScaledVector(tt, -1), c1.clone().addScaledVector(sm, 0.0052 * RK).addScaledVector(tt, -1), c1.clone().addScaledVector(sm, 0.0052 * RK).addScaledVector(tt, 1), c1.clone().addScaledVector(sm, -0.0052 * RK).addScaledVector(tt, 1), m, 0x6b4423);
+        for (let i = 0; i < pts.length - 1; i += 1) {   // sleepers: one small brown plank across the track per segment
+          const a = pts[i], b = pts[i + 1], sideA = sideways[i], sideB = sideways[i + 1];
+          const middle = a.clone().add(b).normalize(), sideMiddle = sideA.clone().add(sideB).normalize(), halfLength = angle(a, b) * 0.28;
+          const along = b.clone().sub(a).normalize().multiplyScalar(halfLength);
+          const centre = middle.clone().multiplyScalar(1.0017);
+          quad(centre.clone().addScaledVector(sideMiddle, -0.0052 * RK).addScaledVector(along, -1), centre.clone().addScaledVector(sideMiddle, 0.0052 * RK).addScaledVector(along, -1), centre.clone().addScaledVector(sideMiddle, 0.0052 * RK).addScaledVector(along, 1), centre.clone().addScaledVector(sideMiddle, -0.0052 * RK).addScaledVector(along, 1), middle, 0x6b4423);
         }
       }
-      const geo = new T.BufferGeometry();
-      geo.setAttribute('position', new T.BufferAttribute(new Float32Array(pos), 3)); geo.setAttribute('normal', new T.BufferAttribute(new Float32Array(nor), 3)); geo.setAttribute('color', new T.BufferAttribute(new Float32Array(col), 3));
-      const m = new T.Mesh(geo, toon(0xffffff, { vertexColors: true, side: T.DoubleSide })); m.frustumCulled = false;
-      planetGroup.add(m); rail.trackMesh = m;
+      const geometry = new T.BufferGeometry();
+      geometry.setAttribute('position', new T.BufferAttribute(new Float32Array(positions), 3));
+      geometry.setAttribute('normal', new T.BufferAttribute(new Float32Array(normals), 3));
+      geometry.setAttribute('color', new T.BufferAttribute(new Float32Array(colors), 3));
+      const trackMesh = new T.Mesh(geometry, toon(0xffffff, { vertexColors: true, side: T.DoubleSide }));
+      trackMesh.frustumCulled = false;
+      planetGroup.add(trackMesh);
+      rail.trackMesh = trackMesh;
     }
   }
-  const nearRail = (n, thr) => { const c = Math.cos(thr); for (const s of rail.samples) if (s.dot(n) > c) return true; return false; };
+  // Is direction `n` within angle `thr` of any railway track?
+  const nearRail = (n, thr) => {
+    const cosThreshold = Math.cos(thr);
+    for (const sample of rail.samples) if (sample.dot(n) > cosThreshold) return true;
+    return false;
+  };
 
   /* ---------- countries: about eight on the big landmasses, and every decent island its own state ---------- */
   const countries = [];
