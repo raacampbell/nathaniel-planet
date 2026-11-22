@@ -1598,91 +1598,139 @@ function build() {
 
   /* ---------- storms ---------- */
   const storms = [];
-  function findStorm(rad, minLat, maxLat, avoid) {
-    let best = null, bs = -1;
+  // Finds a patch of deep open sea for a storm of angular radius `radius`: between latitudes minLat and maxLat (as |y|),
+  // away from the `avoid` list ([{ n, r }]), as deep as possible and as far from cities as possible. Returns a direction array, or null.
+  function findStorm(radius, minLat, maxLat, avoid) {
+    let best = null, bestScore = -1;
     for (let i = 0; i < 6000; i++) {
       const d = P.randomDir(rng);
       if (Math.abs(d[1]) < minLat || Math.abs(d[1]) > maxLat) continue;
-      if (!allOcean(d, rad * 1.1)) continue;
+      if (!allOcean(d, radius * 1.1)) continue;
       const n = v3(d);
-      if (avoid.some(a => angle(n, a.n) < a.r + rad + 0.13)) continue;
-      const dist = Math.min(...cities.map(c => angle(n, c.n)));
-      const score = P.depth(d) + dist * 0.5;
-      if (score > bs) { bs = score; best = d; }
+      if (avoid.some(other => angle(n, other.n) < other.r + radius + 0.13)) continue;
+      const distanceToNearestCity = Math.min(...cities.map(city => angle(n, city.n)));
+      const score = P.depth(d) + distanceToNearestCity * 0.5;
+      if (score > bestScore) { bestScore = score; best = d; }
     }
     return best;
   }
+  /* Makes a spiral storm over the sea at direction `n`, angular radius `rad`, with `arms` spiral arms. `lines` are
+     the jokes shown when you tap it. The cloud picture is drawn on a canvas, wrapped onto the sphere, and spins;
+     zap() makes it spin faster and flash with lightning. Returns { name, n, r, lines, li, zap }. */
   function makeStorm(name, n, rad, arms, lines) {
     const stormGroup = new T.Group();
-    const S = 1024, c = document.createElement('canvas'); c.width = c.height = S;
-    const x = c.getContext('2d'); x.translate(S / 2, S / 2); x.scale(2, 2);
-    const disc = x.createRadialGradient(0, 0, 40, 0, 0, 250);
-    disc.addColorStop(0, 'rgba(60,80,150,.55)'); disc.addColorStop(0.8, 'rgba(150,170,225,.45)'); disc.addColorStop(1, 'rgba(255,255,255,0)');
-    x.fillStyle = disc; x.beginPath(); x.arc(0, 0, 250, 0, 6.2832); x.fill();
-    const blobs = [], srng = PlanetGen.mulberry32(Math.floor(rad * 1000));
-    for (let a = 0; a < arms; a++) for (let t = 0; t <= 1; t += 0.011) {
-      const th = a * (6.2832 / arms) + t * 4.6, r = 55 + t * 185, rad2 = 20 * (1 - t * 0.5) + 5;
-      blobs.push([Math.cos(th) * r, Math.sin(th) * r, rad2]);
-      if (srng() < 0.55) { const o = srng() * 6.28, q = rad2 * (0.7 + srng() * 0.5); blobs.push([Math.cos(th) * r + Math.cos(o) * q, Math.sin(th) * r + Math.sin(o) * q, rad2 * (0.35 + srng() * 0.25)]); }
+    const SIZE = 1024, cloudCanvas = document.createElement('canvas');
+    cloudCanvas.width = cloudCanvas.height = SIZE;
+    const draw = cloudCanvas.getContext('2d');
+    draw.translate(SIZE / 2, SIZE / 2);
+    draw.scale(2, 2);
+    // a soft bluish disc as the base of the storm
+    const disc = draw.createRadialGradient(0, 0, 40, 0, 0, 250);
+    disc.addColorStop(0, 'rgba(60,80,150,.55)');
+    disc.addColorStop(0.8, 'rgba(150,170,225,.45)');
+    disc.addColorStop(1, 'rgba(255,255,255,0)');
+    draw.fillStyle = disc;
+    draw.beginPath();
+    draw.arc(0, 0, 250, 0, 6.2832);
+    draw.fill();
+    // cloud puffs along each spiral arm (each puff is [x, y, radius]); some get a smaller puff next to them
+    const blobs = [], stormRandom = PlanetGen.mulberry32(Math.floor(rad * 1000));
+    for (let arm = 0; arm < arms; arm++) for (let along = 0; along <= 1; along += 0.011) {
+      const theta = arm * (6.2832 / arms) + along * 4.6, distance = 55 + along * 185, puffRadius = 20 * (1 - along * 0.5) + 5;
+      blobs.push([Math.cos(theta) * distance, Math.sin(theta) * distance, puffRadius]);
+      if (stormRandom() < 0.55) {
+        const offsetAngle = stormRandom() * 6.28, offsetDistance = puffRadius * (0.7 + stormRandom() * 0.5);
+        blobs.push([Math.cos(theta) * distance + Math.cos(offsetAngle) * offsetDistance, Math.sin(theta) * distance + Math.sin(offsetAngle) * offsetDistance, puffRadius * (0.35 + stormRandom() * 0.25)]);
+      }
     }
-    x.fillStyle = '#1c2a66'; for (const b of blobs) { x.beginPath(); x.arc(b[0], b[1], b[2] + 4, 0, 6.2832); x.fill(); }
-    x.fillStyle = '#ffffff'; for (const b of blobs) { x.beginPath(); x.arc(b[0], b[1], b[2], 0, 6.2832); x.fill(); }
-    x.fillStyle = 'rgba(180,200,245,.55)'; for (const b of blobs) { x.beginPath(); x.arc(b[0] + b[2] * 0.2, b[1] + b[2] * 0.25, b[2] * 0.72, 0, 6.2832); x.fill(); }
-    x.globalCompositeOperation = 'destination-out';
-    x.beginPath(); x.arc(0, 0, 40, 0, 6.2832); x.fill();
-    x.globalCompositeOperation = 'source-over';
-    x.strokeStyle = '#1c2a66'; x.lineWidth = 5; x.beginPath(); x.arc(0, 0, 41, 0, 6.2832); x.stroke();
-    const stexture = new T.CanvasTexture(c); stexture.anisotropy = maxAniso;
-    const SEG = 64, geo = new T.PlaneGeometry(2 * rad, 2 * rad, SEG, SEG), p = geo.attributes.position;
-    for (let i = 0; i < p.count; i++) {   // wrap a flat patch onto the sphere around +Z
-      const px = p.getX(i), py = p.getY(i), l = Math.hypot(px, py);
-      if (l < 1e-6) { p.setXYZ(i, 0, 0, 1.012); continue; }
-      p.setXYZ(i, Math.sin(l) * px / l * 1.012, Math.sin(l) * py / l * 1.012, Math.cos(l) * 1.012);
+    // draw all the puffs three times: dark outline, white body, then a bluish shading patch
+    draw.fillStyle = '#1c2a66';
+    for (const blob of blobs) { draw.beginPath(); draw.arc(blob[0], blob[1], blob[2] + 4, 0, 6.2832); draw.fill(); }
+    draw.fillStyle = '#ffffff';
+    for (const blob of blobs) { draw.beginPath(); draw.arc(blob[0], blob[1], blob[2], 0, 6.2832); draw.fill(); }
+    draw.fillStyle = 'rgba(180,200,245,.55)';
+    for (const blob of blobs) { draw.beginPath(); draw.arc(blob[0] + blob[2] * 0.2, blob[1] + blob[2] * 0.25, blob[2] * 0.72, 0, 6.2832); draw.fill(); }
+    // punch a hole for the eye of the storm, with a dark ring round it
+    draw.globalCompositeOperation = 'destination-out';
+    draw.beginPath();
+    draw.arc(0, 0, 40, 0, 6.2832);
+    draw.fill();
+    draw.globalCompositeOperation = 'source-over';
+    draw.strokeStyle = '#1c2a66';
+    draw.lineWidth = 5;
+    draw.beginPath();
+    draw.arc(0, 0, 41, 0, 6.2832);
+    draw.stroke();
+    const stormTexture = new T.CanvasTexture(cloudCanvas);
+    stormTexture.anisotropy = maxAniso;
+    // A flat square patch bent to fit the sphere, centred on +Z (the whole group is turned to the storm's position later).
+    const SEGMENTS = 64, patchGeometry = new T.PlaneGeometry(2 * rad, 2 * rad, SEGMENTS, SEGMENTS), patchPositions = patchGeometry.attributes.position;
+    for (let i = 0; i < patchPositions.count; i++) {   // wrap a flat patch onto the sphere around +Z
+      const px = patchPositions.getX(i), py = patchPositions.getY(i), distance = Math.hypot(px, py);
+      if (distance < 1e-6) { patchPositions.setXYZ(i, 0, 0, 1.012); continue; }
+      patchPositions.setXYZ(i, Math.sin(distance) * px / distance * 1.012, Math.sin(distance) * py / distance * 1.012, Math.cos(distance) * 1.012);
     }
-    geo.computeVertexNormals();
-    const mesh = new T.Mesh(geo, new T.MeshBasicMaterial({ map: stexture, transparent: true, depthWrite: false }));
-    const bc = document.createElement('canvas'); bc.width = bc.height = 512;
-    const boltCtx = bc.getContext('2d'), boltTex = new T.CanvasTexture(bc);
-    const boltMesh = new T.Mesh(geo, new T.MeshBasicMaterial({ map: boltTex, transparent: true, depthWrite: false, blending: T.AdditiveBlending }));
-    boltMesh.visible = false; boltMesh.renderOrder = 3; mesh.renderOrder = 2;
-    const St = { name, n: n.clone(), r: rad, lines, li: 0 };
-    mesh.userData = { kind: 'storm', ref: St };
+    patchGeometry.computeVertexNormals();
+    const mesh = new T.Mesh(patchGeometry, new T.MeshBasicMaterial({ map: stormTexture, transparent: true, depthWrite: false }));
+    // A second, glowing layer on the same patch for the lightning bolts (hidden until the storm is zapped).
+    const boltCanvas = document.createElement('canvas');
+    boltCanvas.width = boltCanvas.height = 512;
+    const boltContext = boltCanvas.getContext('2d'), boltTexture = new T.CanvasTexture(boltCanvas);
+    const boltMesh = new T.Mesh(patchGeometry, new T.MeshBasicMaterial({ map: boltTexture, transparent: true, depthWrite: false, blending: T.AdditiveBlending }));
+    boltMesh.visible = false;
+    boltMesh.renderOrder = 3;
+    mesh.renderOrder = 2;
+    const storm = { name, n: n.clone(), r: rad, lines, li: 0 };    // li: which joke is shown next
+    mesh.userData = { kind: 'storm', ref: storm };
     stormGroup.add(mesh, boltMesh);
     stormGroup.quaternion.setFromUnitVectors(new T.Vector3(0, 0, 1), n);
-    planetGroup.add(stormGroup); pickables.push(mesh);
-    addLabel(name, n, 1.05, 'storm', () => select('storm', St));
-    let boost = 0, flashT = 0, boltSeed = 0;
+    planetGroup.add(stormGroup);
+    pickables.push(mesh);
+    addLabel(name, n, 1.05, 'storm', () => select('storm', storm));
+    let boost = 0, flashTime = 0, boltTimer = 0;   // extra spin (seconds left), lightning (seconds left), seconds until the bolts are redrawn
+    // Draws three new jagged lightning bolts on the bolt canvas.
     function drawBolts() {
-      const q = boltCtx; q.clearRect(0, 0, 512, 512);
-      q.save(); q.translate(256, 256); q.lineCap = q.lineJoin = 'round';
-      for (let b = 0; b < 3; b++) {
-        let px = (Math.random() - .5) * 300, py = (Math.random() - .5) * 300 - 20;
-        const pts = [[px, py]];
-        for (let i = 0; i < 7; i++) { px += (Math.random() - .5) * 60; py += 22 + Math.random() * 24; pts.push([px, py]); }
-        for (const [w, col] of [[16, 'rgba(255,230,90,.45)'], [7, '#ffe14d'], [3, '#ffffff']]) {
-          q.strokeStyle = col; q.lineWidth = w; q.beginPath();
-          pts.forEach((pt, i) => i ? q.lineTo(pt[0], pt[1]) : q.moveTo(pt[0], pt[1])); q.stroke();
+      const context = boltContext;
+      context.clearRect(0, 0, 512, 512);
+      context.save();
+      context.translate(256, 256);
+      context.lineCap = context.lineJoin = 'round';
+      for (let bolt = 0; bolt < 3; bolt++) {
+        let x = (Math.random() - .5) * 300, y = (Math.random() - .5) * 300 - 20;
+        const boltPoints = [[x, y]];
+        for (let i = 0; i < 7; i++) { x += (Math.random() - .5) * 60; y += 22 + Math.random() * 24; boltPoints.push([x, y]); }
+        for (const [width, color] of [[16, 'rgba(255,230,90,.45)'], [7, '#ffe14d'], [3, '#ffffff']]) {   // wide glow, yellow, white core
+          context.strokeStyle = color;
+          context.lineWidth = width;
+          context.beginPath();
+          boltPoints.forEach((point, i) => i ? context.lineTo(point[0], point[1]) : context.moveTo(point[0], point[1]));
+          context.stroke();
         }
       }
-      q.restore(); boltTex.needsUpdate = true;
+      context.restore();
+      boltTexture.needsUpdate = true;
     }
-    St.zap = () => { boost = 2.8; flashT = 1.0; boltSeed = 0; };
-    const dir = arms === 2 ? 1 : -1;
+    storm.zap = () => { boost = 2.8; flashTime = 1.0; boltTimer = 0; };   // called when you tap the storm
+    const spinDirection = arms === 2 ? 1 : -1;
     tickers.push((t, dt) => {
-      mesh.rotation.z += dir * dt * (0.35 + boost * 0.9) * (arms === 2 ? 1.4 : 1);
+      mesh.rotation.z += spinDirection * dt * (0.35 + boost * 0.9) * (arms === 2 ? 1.4 : 1);
       boost = Math.max(0, boost - dt);
-      if (flashT > 0) {
-        flashT -= dt;
-        if (boltSeed <= 0) { drawBolts(); boltSeed = 0.09; }
-        boltSeed -= dt;
-        const on = (Math.floor(flashT * 11) % 2 === 0) && flashT > 0.05;
-        boltMesh.visible = on; mesh.material.color.setScalar(on ? 1.7 : 1);
-      } else { boltMesh.visible = false; mesh.material.color.setScalar(1); }
+      if (flashTime > 0) {                          // lightning: redraw the bolts every 0.09 s and blink on and off
+        flashTime -= dt;
+        if (boltTimer <= 0) { drawBolts(); boltTimer = 0.09; }
+        boltTimer -= dt;
+        const flashOn = (Math.floor(flashTime * 11) % 2 === 0) && flashTime > 0.05;
+        boltMesh.visible = flashOn;
+        mesh.material.color.setScalar(flashOn ? 1.7 : 1);
+      } else {
+        boltMesh.visible = false;
+        mesh.material.color.setScalar(1);
+      }
     });
-    storms.push(St);
-    return St;
+    storms.push(storm);
+    return storm;
   }
-  const RAD1 = 0.2 * K, RAD2 = 0.085 / 1.5 * RK;
+  const RAD1 = 0.2 * K, RAD2 = 0.085 / 1.5 * RK;    // angular radii of the big hurricane and the little storm
   const s1d = findStorm(RAD1, 0.22, 0.55, []) || [0.5, 0.35, 0.8];
   const storm1 = makeStorm('Hurricane Nanette', v3(s1d).normalize(), RAD1, 3,
     ['Zap! Hurricane Nanette is not amused.', 'Boom! It has been spinning for 900 years and is very dizzy.', 'Crackle! Nobody dares go near it, except one small boat.']);
@@ -1691,14 +1739,22 @@ function build() {
     ['Pip! The little storm sneezed and made a rainbow by accident.', 'Zip! Pip is only 40 years old and already very important.', 'Fizz! Pip is practising to be a hurricane when it grows up.']);
 
   /* ---------- tiny life ---------- */
-  function perpFrame(n) { const u = new T.Vector3().crossVectors(n, Math.abs(n.y) > .9 ? new T.Vector3(1, 0, 0) : UP).normalize(); return [u, new T.Vector3().crossVectors(n, u)]; }
-  const oceanPt = (minDep, maxDep, minStormDist) => {
+  // Two perpendicular unit vectors lying on the planet's surface at direction `n`.
+  function perpFrame(n) {
+    const east = new T.Vector3().crossVectors(n, Math.abs(n.y) > .9 ? new T.Vector3(1, 0, 0) : UP).normalize();
+    return [east, new T.Vector3().crossVectors(n, east)];
+  }
+  // A random spot in the open sea (as a Vector3) with depth between minDepth and maxDepth, not near the poles,
+  // and at least minStormDistance (default 0.3) from any storm. Returns null if none is found.
+  const oceanPt = (minDepth, maxDepth, minStormDistance) => {
     for (let i = 0; i < 4000; i++) {
-      const d = P.randomDir(rng); if (P.isLand(d)) continue;
-      const dep = P.depth(d); if (dep < minDep || dep > maxDep) continue;
+      const d = P.randomDir(rng);
+      if (P.isLand(d)) continue;
+      const depth = P.depth(d);
+      if (depth < minDepth || depth > maxDepth) continue;
       if (Math.abs(d[1]) > 0.8) continue;
       const n = v3(d);
-      if (storms.some(s => angle(n, s.n) < (minStormDist || 0.3) + s.r)) continue;
+      if (storms.some(storm => angle(n, storm.n) < (minStormDistance || 0.3) + storm.r)) continue;
       return n;
     }
     return null;
