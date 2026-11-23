@@ -35,6 +35,7 @@
   .label.falls{background:#ffdcee;color:#6a1240;border-color:#6a1240;box-shadow:0 2px 0 #6a1240;font-size:15px}
   .label.glacier{background:#e4fbff;color:#0a4a5c;border-color:#0a4a5c;box-shadow:0 2px 0 #0a4a5c;font-size:15px}
   .label.snowman{background:#f4fbff;color:#2a4a66;border-color:#2a4a66;box-shadow:0 2px 0 #2a4a66}
+  .label.castle{background:#e6dccb;color:#3a2a1a;border-color:#3a2a1a;box-shadow:0 2px 0 #3a2a1a;font-size:15px}
   .label.lake{background:#eaf6ff;color:#123a5c;border-color:#123a5c;box-shadow:0 2px 0 #123a5c}
   .label:hover{background:var(--accent)}
   .label.boat{background:#fff;color:#12306a;border-color:#12306a;box-shadow:0 2px 0 #12306a;font-size:14px;pointer-events:none}
@@ -1195,7 +1196,8 @@ function build() {
     const zero = new T.Matrix4().makeScale(0, 0, 0);
     for (const set of treeSets) {
       set.arr.forEach((tree, i) => {
-        const hide = age === 'ice' || cities.some(city => angle(tree.n, city.n) < city.Ru * AGE_R[age] * TOWN_S * 1.02) || (age === 'space' && launch.n && angle(tree.n, launch.n) < 0.04);
+        const inCastlePit = age === 'steam' && castle && angle(tree.n, castle.n) < 0.26 * K;   // no trees growing in St. Nate's pit
+        const hide = age === 'ice' || inCastlePit || cities.some(city => angle(tree.n, city.n) < city.Ru * AGE_R[age] * TOWN_S * 1.02) || (age === 'space' && launch.n && angle(tree.n, launch.n) < 0.04);
         set.m.setMatrixAt(i, hide ? zero : set.mats[i]);
         set.ink.setMatrixAt(i, hide ? zero : set.imats[i]);
       });
@@ -3366,6 +3368,129 @@ function build() {
       snowmen.push(snowman);
     });
   }
+  /* --- St. Nate's Castle (steam age only): a ruined castle at the bottom of a crater, far from every city --- */
+  const castleGroup = new T.Group();               // everything that exists only in the steam age castle scene
+  planetGroup.add(castleGroup);
+  let castle = null;                                // { name, n, li, label } once a site has been found
+  {
+    const castleScale = K;                           // the castle's own units are planet radii; the crater is about 0.24 wide
+    // Site: land that is not ice or high ground, clear of volcanoes/mountains and the railway, as far from the nearest city as possible.
+    const distanceFromTowns = n => Math.min(...cities.map(city => angle(n, city.n) - city.Ru * AGE_R.steam * TOWN_S));
+    const sites = cand.filter(c => c.b !== 'ice' && Math.abs(c.d[1]) < 0.7 && c.h < 0.4 && !nearRail(c.n, 0.1)
+      && avoidN.every(([avoidDirection, avoidRadius]) => angle(c.n, avoidDirection) > avoidRadius + 0.15 * castleScale + 0.04));
+    let bestSite = null, bestScore = -1e9;
+    for (const site of sites) {
+      if (!nearLand(site.d, 0.1)) continue;          // room for the crater: land all round
+      const score = distanceFromTowns(site.n);
+      if (score > bestScore) { bestScore = score; bestSite = site; }
+    }
+    if (bestSite) {
+      const castleRandom = PlanetGen.mulberry32(1399);   // own random numbers, so the world's other random choices are unchanged
+      const stone = 0xa8a398, darkStone = 0x6a665e, holeColor = 0x1a1612, roofColor = 0xb04a3a;
+      const part = new T.Group();                     // the castle and crater, in local units (y up) before scaling and placing
+      // The pit: a ring of raised earth with a steep inner wall and a flat floor, coloured in earthy bands.
+      const profile = [[0.24, 0], [0.2, 0.012], [0.17, 0.04], [0.15, 0.062], [0.135, 0.067], [0.12, 0.052], [0.108, 0.03], [0.1, 0.006], [0.0, 0.0]].map(point => new T.Vector2(point[0], point[1]));
+      const craterGeometry = new T.LatheGeometry(profile, 40);
+      const craterColors = new Float32Array(craterGeometry.attributes.position.count * 3), tint = new T.Color();
+      for (let i = 0; i < craterGeometry.attributes.position.count; i++) {
+        const radius = Math.hypot(craterGeometry.attributes.position.getX(i), craterGeometry.attributes.position.getZ(i)), height = craterGeometry.attributes.position.getY(i);
+        if (radius > 0.138) tint.set(0xb89560);                                              // outer slope: dry earth
+        else if (height > 0.006 && radius > 0.1) tint.set(Math.floor(height / 0.012) % 2 ? 0x6e4a2e : 0x86603c);   // inner wall: darker strata
+        else tint.set(0x7a6a4a);                                                              // floor
+        craterColors.set([tint.r, tint.g, tint.b], i * 3);
+      }
+      craterGeometry.setAttribute('color', new T.BufferAttribute(craterColors, 3));
+      part.add(new T.Mesh(craterGeometry, toon(0xffffff, { vertexColors: true, side: T.DoubleSide })));
+      // A box standing on the floor (y is the bottom), with an outline unless `plain`.
+      const box = (width, height, depth, x, y, z, color, plain) => {
+        const mesh = new T.Mesh(new T.BoxGeometry(width, height, depth), toon(color));
+        mesh.position.set(x, y + height / 2, z);
+        part.add(plain ? mesh : withInk(mesh, 1.08));
+        return mesh;
+      };
+      // Curtain walls: a square 0.11 across. Each side is a list of [start, end] pieces along it (gaps are breaches).
+      const HALF = 0.055, WALL_H = 0.026, WALL_T = 0.007;
+      const sideSegments = {
+        north: [[-0.055, -0.02], [0.012, 0.055]],        // a big breach in the middle
+        south: [[-0.055, -0.012], [0.012, 0.055]],       // the gateway
+        east: [[-0.055, 0.0]],                            // half of it has fallen down
+        west: [[-0.055, 0.055]],
+      };
+      for (const [side, pieces] of Object.entries(sideSegments)) {
+        const alongX = side === 'north' || side === 'south', sign = side === 'north' || side === 'west' ? -1 : 1;
+        for (const [start, end] of pieces) {
+          const length = end - start, middle = (start + end) / 2;
+          box(alongX ? length : WALL_T, WALL_H, alongX ? WALL_T : length, alongX ? middle : sign * HALF, 0, alongX ? sign * HALF : middle, stone);
+          for (let tooth = 0; tooth < Math.floor(length / 0.012); tooth++) {      // battlements, some missing
+            if (castleRandom() < 0.35) continue;
+            const along = start + 0.006 + tooth * 0.012;
+            box(alongX ? 0.007 : WALL_T, 0.006, alongX ? WALL_T : 0.007, alongX ? along : sign * HALF, WALL_H, alongX ? sign * HALF : along, stone, true);
+          }
+          // a few dark holes knocked through the wall face (slightly proud of it so they show)
+          for (let hole = 0; hole < Math.floor(length / 0.03); hole++) {
+            const along = start + 0.012 + hole * 0.03 + castleRandom() * 0.008, up = 0.005 + castleRandom() * 0.01, outward = sign * (HALF + WALL_T / 2 + 0.0004);
+            box(alongX ? 0.008 : 0.001, 0.007, alongX ? 0.001 : 0.008, alongX ? along : outward, up, alongX ? outward : along, holeColor, true);
+          }
+        }
+      }
+      // Corner towers: north-west standing with a faded roof, north-east collapsed to a stump, south-east broken off, south-west whole.
+      const tower = (x, z, height, roof) => {
+        const body = new T.Mesh(new T.CylinderGeometry(0.0125, 0.0135, height, 10), toon(stone));
+        body.position.set(x, height / 2, z);
+        part.add(withInk(body, 1.08));
+        if (roof) {
+          const cone = new T.Mesh(new T.ConeGeometry(0.0165, 0.02, 10), toon(roofColor));
+          cone.position.set(x, height + 0.01, z);
+          part.add(withInk(cone, 1.08));
+        }
+      };
+      tower(-HALF, -HALF, 0.044, true);
+      tower(HALF, -HALF, 0.012, false);
+      tower(HALF, HALF, 0.03, false);
+      tower(-HALF, HALF, 0.044, true);
+      box(0.007, 0.016, 0.003, HALF - 0.004, 0.026, HALF - 0.006, holeColor, true);          // a window blown out of the broken tower
+      // The keep, with a hole in its side and a snapped flagpole still holding a tatty flag.
+      box(0.03, 0.058, 0.03, 0, 0, -0.008, stone);
+      box(0.012, 0.012, 0.0015, 0.004, 0.03, 0.0078, holeColor, true);
+      box(0.034, 0.004, 0.034, 0, 0.058, -0.008, darkStone, true);
+      const pole = new T.Mesh(new T.CylinderGeometry(0.0007, 0.0007, 0.02, 4), toon(0x5a3a22));
+      pole.position.set(0.006, 0.07, -0.008);
+      pole.rotation.z = -0.5;                                                                // snapped and leaning
+      part.add(pole);
+      const flag = new T.Mesh(new T.PlaneGeometry(0.014, 0.008), toon(0xd63a3a, { side: T.DoubleSide }));
+      flag.position.set(0.0125, 0.0655, -0.008);
+      flag.rotation.y = Math.PI / 2;
+      part.add(flag);
+      // The broken drawbridge (a plank lying at an angle at the gateway) and rubble on the floor.
+      const plank = box(0.016, 0.002, 0.03, 0, 0, HALF + 0.02, 0x7a5a38, true);
+      plank.rotation.x = 0.35;
+      for (let i = 0; i < 12; i++) {
+        const angleAround = castleRandom() * 6.283, distance = 0.03 + castleRandom() * 0.06;
+        const size = 0.003 + castleRandom() * 0.005;
+        const rubble = box(size, size * 0.7, size, Math.cos(angleAround) * distance, 0, Math.sin(angleAround) * distance, castleRandom() < 0.5 ? stone : darkStone, true);
+        rubble.rotation.y = castleRandom() * 3;
+      }
+      part.scale.setScalar(castleScale);
+      placeOnSurface(part, bestSite.n, 1.0, castleRandom() * 6);
+      castleGroup.add(part);
+      castle = { name: "St. Nate's Castle", n: bestSite.n.clone(), li: 0 };
+      // An invisible sphere over the crater that you can click or tap.
+      const hitSphere = new T.Mesh(new T.SphereGeometry(1, 8, 6), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+      hitSphere.position.copy(castle.n).multiplyScalar(1 + 0.03 * castleScale);
+      hitSphere.scale.setScalar(0.2 * castleScale);
+      hitSphere.userData = { kind: 'castle', ref: castle };
+      castleGroup.add(hitSphere);
+      pickables.push(hitSphere);
+      castle.label = addLabel(castle.name, castle.n, 1 + 0.1 * castleScale + 0.05, 'castle', () => select('castle', castle));
+    }
+  }
+  // Shows the castle (and its label) only in the steam age.
+  function setCastleVisible(visible) {
+    castleGroup.visible = visible;
+    if (castle) castle.label.hidden = !visible;
+  }
+  clearTrees(AGE);         // the world starts in the steam age: clear the trees out of the pit now that it exists
+
   const SNOWMAN_BUTTON_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="7" r="3.5"/><circle cx="12" cy="16.5" r="5.5"/><path d="M8 3.5h8M10 3.5V2h4v1.5"/></svg>';
   let cityButtonIcon = null;     // the city button's normal picture, remembered the first time we swap it
   // Switches the scenery on or off for the ice age: frozen planet, snowmen in, towns/labels out, and the city button becomes the snowmen button.
@@ -3399,6 +3524,7 @@ function build() {
       ageGroups.both.visible = age === 'modern' || age === 'space';
       ageGroups.space.visible = age === 'space';
       setIceAgeScenery(age === 'ice');
+      setCastleVisible(age === 'steam');
       ageMsg.classList.remove('on');
       if (typeof onAgeChange === 'function') onAgeChange(age);
     }), 60);
@@ -3441,6 +3567,7 @@ function build() {
         return [
           ...volcanoes.map(volcano => [volcano.name, () => select('volcano', volcano)]),
           ...storms.map(storm => [storm.name, () => select('storm', storm)]),
+          ...(AGE === 'steam' && castle ? [['🏰 ' + castle.name, () => select('castle', castle)]] : []),
           ...(AGE === 'space' ? [...(launch.n ? [['🚀 ' + launch.name, () => select('launch', launch)]] : []), ['🛰️ ' + station.name, () => select('station', station)]] : []),
         ];
       },
@@ -3604,7 +3731,7 @@ function build() {
   world = { P, cities, volcanoes, storms, boats, selectBoat, clearBoat, boatSelected: () => !!selectedBoat };
   // Debugging: add ?debug to the address to reach the world from the browser console as window.__np.
   if (new URLSearchParams(location.search).has('debug')) window.__np = { invade: () => { startInvasion(); return invasion; }, setAge: a => setAge(a), launch, satellites, countries, camera, controls, scene, planetGroup, boats, storms, volcanoes, cities, rail, T, tilted: () => tiltedMat,
-    blackHole: () => { startBlackHole(); return blackHole; }, station, tickers, snowmen };
+    blackHole: () => { startBlackHole(); return blackHole; }, station, tickers, snowmen, castle: () => castle };
   // Debugging: ?go=volcano | volcano2 | volcano3 | storm | storm2 | city3 | boat2 jumps straight to that thing (and ?d= sets the camera distance).
   const goTarget = new URLSearchParams(location.search).get('go');
   if (goTarget) setTimeout(() => {
@@ -3713,6 +3840,61 @@ const LAKE_LINES = [
   "One lone penguin skates here, every single day, practising spins, jumps, and the occasional wildly over-ambitious triple axel — with nobody watching, and no competition to win.",
   "Local legend says this penguin has never once fallen over. Local legend has also never actually stayed around to watch the whole routine."
 ];
+const CASTLE_LINES = [
+  "This is a castle in a pit. Most castles are made on top of hills, because they are easier to defend and it's hard for attackers to climb up there. St. Nate's Castle is not like this. It's in a PIT.",
+  "Why? It's a trick! St. Nate decided that since NO other castle was designed this way, the attackers would be disturbed and not attempt the attack.",
+  "It didn't work. The attackers got into the castle in about 20 minutes. St. Nate's Castle is now a tourist attraction."
+];
+// Draws the animated 112 x 112 picture on St. Nate's Castle's card at time t seconds: a cross-section of the pit with the ruined
+// castle at the bottom, a tatty flag flapping, and tourists on the rim who take a photo (with a flash) every few seconds.
+function drawCastleCloseup(context, t) {
+  context.clearRect(0, 0, 112, 112);
+  const skyGradient = context.createLinearGradient(0, 0, 0, 112);
+  skyGradient.addColorStop(0, '#bfe3ff');
+  skyGradient.addColorStop(1, '#f2fbff');
+  context.fillStyle = skyGradient;
+  context.fillRect(0, 0, 112, 112);
+  // ground with the pit cut out of it (a steep-sided trapezoid)
+  context.fillStyle = '#9a7a4a';
+  context.beginPath();
+  context.moveTo(0, 40); context.lineTo(22, 40); context.lineTo(34, 96); context.lineTo(78, 96); context.lineTo(90, 40); context.lineTo(112, 40); context.lineTo(112, 112); context.lineTo(0, 112);
+  context.fill();
+  context.strokeStyle = '#4a2f18'; context.lineWidth = 1.6; context.stroke();
+  context.fillStyle = '#6e4a2e';                                  // darker strata on the pit walls
+  context.beginPath(); context.moveTo(24, 52); context.lineTo(31, 52); context.lineTo(33, 62); context.lineTo(26, 62); context.fill();
+  context.beginPath(); context.moveTo(81, 52); context.lineTo(88, 52); context.lineTo(85, 66); context.lineTo(79, 66); context.fill();
+  // the castle: two walls with holes and gaps, a keep, two towers
+  const stone = '#a8a398', dark = '#1a1612';
+  const fill = (color, x, y, w, h) => { context.fillStyle = color; context.fillRect(x, y, w, h); context.strokeStyle = '#3a342c'; context.lineWidth = 1; context.strokeRect(x, y, w, h); };
+  fill(stone, 38, 82, 14, 14); fill(stone, 63, 86, 12, 10);        // wall pieces (with a gap between them)
+  fill(stone, 49, 62, 14, 34);                                      // keep
+  fill(stone, 36, 70, 7, 26); fill(stone, 73, 84, 7, 12);           // a tall tower and a broken stump
+  context.fillStyle = '#b04a3a';
+  context.beginPath(); context.moveTo(35, 70); context.lineTo(39.5, 62); context.lineTo(44, 70); context.fill();   // the tower's faded roof
+  fill(dark, 53, 70, 5, 6); fill(dark, 42, 89, 4, 4); fill(dark, 66, 91, 3, 3); // holes
+  // snapped flagpole and flapping tatty flag on the keep
+  context.strokeStyle = '#5a3a22'; context.lineWidth = 1.4;
+  context.beginPath(); context.moveTo(60, 62); context.lineTo(64, 48); context.stroke();
+  context.fillStyle = '#d63a3a';
+  context.beginPath(); context.moveTo(64, 49); context.lineTo(76 + Math.sin(t * 6) * 1.5, 52); context.lineTo(72, 55 + Math.sin(t * 7)); context.lineTo(75 + Math.sin(t * 5), 58); context.lineTo(64, 56); context.fill();
+  // two tourists on the right rim, walking about; every 4 seconds one takes a photo with a flash
+  const photoPhase = t % 4;
+  for (let i = 0; i < 2; i++) {
+    const x = 94 + i * 9 + Math.sin(t * 0.8 + i * 2) * 3, y = 40, bob = Math.abs(Math.sin(t * 5 + i)) * 1.2;
+    context.fillStyle = i ? '#3a8ad6' : '#e0602a';
+    context.beginPath(); context.arc(x, y - 9 - bob, 2.4, 0, 6.283); context.fill();               // head
+    context.fillRect(x - 2, y - 7 - bob, 4, 7);                                                      // body
+    context.fillStyle = '#ffe0bd'; context.beginPath(); context.arc(x, y - 9 - bob, 1.7, 0, 6.283); context.fill();
+  }
+  if (photoPhase > 3.6) {                                                                              // the flash
+    context.fillStyle = 'rgba(255,255,255,' + (1 - (photoPhase - 3.6) / 0.4) + ')';
+    context.beginPath(); context.arc(92, 26, 9, 0, 6.283); context.fill();
+  }
+  // a crow drifting across the sky
+  const crowX = (t * 12) % 140 - 14, crowY = 18 + Math.sin(t * 2) * 3;
+  context.strokeStyle = '#222'; context.lineWidth = 1.4;
+  context.beginPath(); context.moveTo(crowX - 4, crowY - 2 + Math.sin(t * 12) * 2); context.lineTo(crowX, crowY); context.lineTo(crowX + 4, crowY - 2 + Math.sin(t * 12) * 2); context.stroke();
+}
 // Draws the animated 112 x 112 picture on a snowman's card at time t seconds: a shivering, scowling snowman in falling snow,
 // with the scarf and hat colours of this particular snowman (`snowman.scarf`, `snowman.hat`).
 function drawSnowmanCloseup(context, t, snowman) {
@@ -3924,6 +4106,7 @@ function select(kind, c) {
   }
   else if (kind === 'falls') { n = c.n; dist = 1.4; showCard(c.name, FALLS_LINES, drawFallsCloseup); }
   else if (kind === 'glacier') { n = c.n; dist = 1.55; showCard(c.name, GLACIER_LINES, drawGlacierCloseup); }
+  else if (kind === 'castle') { n = c.n; dist = 1.35; showCard(c.name, CASTLE_LINES, drawCastleCloseup); }
   else if (kind === 'lake') { n = c.n; dist = 1.4; showCard(c.name, LAKE_LINES); }
   else if (kind === 'snowman') { n = c.n; dist = 1.3; showCard(c.name, c.lines, (context, t) => drawSnowmanCloseup(context, t, c)); }
   setFocus(n, dist);
