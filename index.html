@@ -34,6 +34,7 @@
   .label.storm{background:#d8e9ff;color:#122a5c;border-color:#122a5c;box-shadow:0 2px 0 #122a5c}
   .label.falls{background:#ffdcee;color:#6a1240;border-color:#6a1240;box-shadow:0 2px 0 #6a1240;font-size:15px}
   .label.glacier{background:#e4fbff;color:#0a4a5c;border-color:#0a4a5c;box-shadow:0 2px 0 #0a4a5c;font-size:15px}
+  .label.snowman{background:#f4fbff;color:#2a4a66;border-color:#2a4a66;box-shadow:0 2px 0 #2a4a66}
   .label.lake{background:#eaf6ff;color:#123a5c;border-color:#123a5c;box-shadow:0 2px 0 #123a5c}
   .label:hover{background:var(--accent)}
   .label.boat{background:#fff;color:#12306a;border-color:#12306a;box-shadow:0 2px 0 #12306a;font-size:14px;pointer-events:none}
@@ -401,15 +402,20 @@ function build() {
 
   /* ---- planet surface: cartoon texture (quick low-res now, full-res from a worker) + animated waves ---- */
   const maxAniso = renderer.capabilities.getMaxAnisotropy();
+  // The Ice Age: how frozen the whole planet looks (0 = normal, 1 = fully frozen). Shared by the planet and the detail tiles,
+  // and eased toward `frostTarget` a little every frame so travelling to or from the ice age fades rather than snaps.
+  const frost = { value: 0 };
+  let frostTarget = 0;
   const planetMat = new T.MeshLambertMaterial({ map: null });
   const wave = { time: { value: 0 }, mask: { value: null } };   // shared with the shader: animation time, and where on the sea waves may be drawn
   // Adds animated white wave marks to the planet's normal shading, only where the wave mask says there is open sea.
   planetMat.onBeforeCompile = shader => {
     shader.uniforms.uTime = wave.time;
     shader.uniforms.uMask = wave.mask;
+    shader.uniforms.uFrost = frost;
     shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vObj;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvObj = position;');
-    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vObj; uniform float uTime; uniform sampler2D uMask;')
+    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vObj; uniform float uTime; uniform sampler2D uMask; uniform float uFrost;')
       .replace('#include <map_fragment>', `#include <map_fragment>
       {
         vec3 q = normalize(vObj);
@@ -426,8 +432,11 @@ function build() {
           float crest = smoothstep(0.80 + 0.16 * (1.0 - e1), 0.84 + 0.15 * (1.0 - e1), w1) * smoothstep(0.35, 0.6, d1)
                       + 0.85 * smoothstep(0.82 + 0.15 * (1.0 - e2), 0.86 + 0.14 * (1.0 - e2), w2) * smoothstep(0.4, 0.65, d2);
           float swell = (w1 + w2) * 0.014;
-          diffuseColor.rgb = mix(diffuseColor.rgb + swell, vec3(0.86, 0.97, 1.0), clamp(crest, 0.0, 1.0) * 0.55 * m);
+          diffuseColor.rgb = mix(diffuseColor.rgb + swell, vec3(0.86, 0.97, 1.0), clamp(crest, 0.0, 1.0) * 0.55 * m * (1.0 - uFrost));
         }
+        // Ice age: blend toward white-ish land and pale-blue frozen sea, keeping a little of the original detail.
+        vec3 frozenColor = mix(vec3(0.94, 0.97, 1.0), vec3(0.70, 0.86, 0.97), smoothstep(0.0, 0.6, m));
+        diffuseColor.rgb = mix(diffuseColor.rgb, frozenColor, uFrost * 0.97);
       }`);
   };
   // Puts a freshly painted surface on the planet: `data` is RGBA pixels (width W, height H), `mask` is the wave mask.
@@ -1186,7 +1195,7 @@ function build() {
     const zero = new T.Matrix4().makeScale(0, 0, 0);
     for (const set of treeSets) {
       set.arr.forEach((tree, i) => {
-        const hide = cities.some(city => angle(tree.n, city.n) < city.Ru * AGE_R[age] * TOWN_S * 1.02) || (age === 'space' && launch.n && angle(tree.n, launch.n) < 0.04);
+        const hide = age === 'ice' || cities.some(city => angle(tree.n, city.n) < city.Ru * AGE_R[age] * TOWN_S * 1.02) || (age === 'space' && launch.n && angle(tree.n, launch.n) < 0.04);
         set.m.setMatrixAt(i, hide ? zero : set.mats[i]);
         set.ink.setMatrixAt(i, hide ? zero : set.imats[i]);
       });
@@ -2838,7 +2847,7 @@ function build() {
   }
 
   /* ================================================================= AGES ================================================================= */
-  let AGE = 'steam';          // the current age: 'stone' | 'steam' | 'modern' | 'space'
+  let AGE = 'steam';          // the current age: 'ice' | 'stone' | 'steam' | 'modern' | 'space'
   const ageGroups = { modern: new T.Group(), space: new T.Group(), both: new T.Group() };     // things that only exist in later ages ('both' = modern and space)
   Object.values(ageGroups).forEach(group => { group.visible = false; planetGroup.add(group); });
   // Two perpendicular unit vectors lying on the planet's surface at direction `n`.
@@ -2924,6 +2933,8 @@ function build() {
   // container ships and bullet trains (2.4x faster) after that. Models are made the first time they are needed.
   function setVehicles(age) {
     for (const ship of ships) {
+      ship.g.visible = age !== 'ice';           // no boats in the ice age
+      if (age === 'ice') continue;
       const key = age === 'stone' ? 'stone' : age === 'steam' ? 'steam' : 'modern';
       if (!ship.models[key]) {
         const model = key === 'stone' ? makeCanoe() : makeContainerShip(ship.hullCol);
@@ -2934,7 +2945,7 @@ function build() {
       for (const modelKey in ship.models) ship.models[modelKey].visible = modelKey === key;
     }
     trains.forEach((train, i) => {
-      const key = age === 'stone' ? null : age === 'steam' ? 'steam' : 'fast';      // no trains in the stone age
+      const key = age === 'stone' || age === 'ice' ? null : age === 'steam' ? 'steam' : 'fast';      // no trains in the stone or ice ages
       if (key === 'fast' && !train.unitsBy.fast) {
         train.unitsBy.fast = makeBulletTrain([0x2f6fb0, 0xc0392b, 0x2e8b57, 0x7a4fb0][i % 4], [0xffd23f, 0x4ecdc4, 0xff9ff3, 0xff9f43][i % 4]);
         train.unitsBy.fast.forEach(unit => { unit.piv.scale.setScalar(K * 1.05); planetGroup.add(unit.piv); });
@@ -2946,7 +2957,7 @@ function build() {
       train.g.visible = !!key;
       train.g.children.forEach(child => { if (child.userData.kind) child.userData.off = !key; });     // the click area is switched off when there is no train
     });
-    if (rail.trackMesh) rail.trackMesh.visible = age !== 'stone';
+    if (rail.trackMesh) rail.trackMesh.visible = age !== 'stone' && age !== 'ice';
   }
 
   /* --- wind turbines (modern and space ages) --- */
@@ -3248,14 +3259,138 @@ function build() {
     }
   }
 
+  /* --- the ice age: ten grumpy snowmen (the only things alive in a frozen world) --- */
+  // Each snowman: a name, the two lines on its card, and its scarf and hat colours.
+  const SNOWMAN_DEFS = [
+    { name: 'Mr. Frozen Pants', scarf: 0xd63a3a, hat: 'top', lines: ["Mr. Frozen Pants has not moved since the ice age began. His trousers froze solid on day one, and he has walked like a plank ever since.", "He would like it known that nobody asked whether he wanted trousers."] },
+    { name: 'Mrs. Frosty Knickers', scarf: 0x7a3ad6, hat: 'beanie', lines: ["Mrs. Frosty Knickers is furious. Somebody has been borrowing her knickers, and she is fairly sure it is the wind.", "Nobody has dared to ask which knickers."] },
+    { name: 'Mr. I did a wee on the floor and it froze', scarf: 0xe8c020, hat: 'none', lines: ["Mr. I did a wee on the floor and it froze is a snowman of few words, mostly because his name already uses all of them.", "He does not want to talk about it. The floor, however, is still there. Frozen. Looking at everyone."] },
+    { name: 'Sir Chills-a-Lot', scarf: 0x2a8a4a, hat: 'bucket', lines: ["Sir Chills-a-Lot used to be a knight. Now he is mostly a pile of snow with opinions and a bucket.", "He insists he is not cold. His teeth, which are pebbles, are chattering anyway."] },
+    { name: 'Lady Brrrenda', scarf: 0xff7ab0, hat: 'beanie', lines: ["Lady Brrrenda says \"Brrr\" to everybody. It is not a greeting. It is a complaint, and she means all of you.", "She has said it 40,000 times. The echo has now started saying it back."] },
+    { name: 'Mr. Nippy Nose', scarf: 0x3a8ad6, hat: 'top', lines: ["Mr. Nippy Nose has a carrot for a nose and a very strong feeling that a rabbit has been looking at it.", "Every morning he checks it is still there. It always is. He still does not relax."] },
+    { name: 'Mrs. Icicle Bottom', scarf: 0xe0602a, hat: 'none', lines: ["Mrs. Icicle Bottom sat on a bench to rest her feet, and the bench froze to her. That was a very long time ago.", "She says she is fine. She is not able to say anything else, either."] },
+    { name: 'Baron von Slushbucket', scarf: 0x6a2a8a, hat: 'top', lines: ["Baron von Slushbucket is a snowman of noble blood, although mostly slush.", "He demands to be addressed as \"Your Chilliness\". Nobody addresses him at all."] },
+    { name: 'Mr. Cold Toes', scarf: 0x2ab0b0, hat: 'bucket', lines: ["Mr. Cold Toes has no toes. He has been complaining about them since the first frost.", "Honestly, nobody has the heart to tell him."] },
+    { name: 'Dr. Snotsicle', scarf: 0x8ac820, hat: 'beanie', lines: ["Dr. Snotsicle is not a real doctor, and the less said about the -sicle part, the better.", "He will examine you for free. He will not wash his hands, because they are frozen to his sleeves."] },
+  ];
+  const iceGroup = new T.Group();                 // everything that exists only in the ice age
+  iceGroup.visible = false;
+  planetGroup.add(iceGroup);
+  const snowmen = [];                              // { name, lines, scarf, hat, n, label } for each snowman
+  // Builds one cartoon snowman (about 4 units tall, standing at the origin) with a grumpy face, scarf and hat.
+  function makeSnowman(definition) {
+    const snowman = new T.Group();
+    const white = () => toon(0xffffff), coal = () => new T.MeshBasicMaterial({ color: 0x15121e });
+    const ball = (radius, y) => { const mesh = withInk(new T.Mesh(new T.SphereGeometry(radius, 16, 12), white()), 1.07); mesh.position.y = y; snowman.add(mesh); return mesh; };
+    ball(1, 0.95); ball(0.72, 2.4); const head = ball(0.52, 3.5);
+    // Face (on the +z side of the head): coal eyes, slanted brows (inner ends lower = grumpy), carrot nose, frowning mouth.
+    for (const side of [-1, 1]) {
+      const eye = new T.Mesh(new T.SphereGeometry(0.075, 8, 6), coal());
+      eye.position.set(side * 0.2, 3.58, 0.47);
+      const brow = new T.Mesh(new T.BoxGeometry(0.26, 0.05, 0.04), coal());
+      brow.position.set(side * 0.2, 3.72, 0.46);
+      brow.rotation.z = side * 0.45;                       // the inner end sinks toward the nose
+      snowman.add(eye, brow);
+    }
+    const nose = new T.Mesh(new T.ConeGeometry(0.075, 0.5, 8).rotateX(Math.PI / 2), toon(0xff8a1f));
+    nose.position.set(0, 3.47, 0.72);
+    snowman.add(nose);
+    for (let i = 0; i < 5; i++) {
+      const mouthAngle = (i / 4 - 0.5) * 1.5;               // a downward arc: a frown
+      const piece = new T.Mesh(new T.SphereGeometry(0.04, 6, 4), coal());
+      piece.position.set(Math.sin(mouthAngle) * 0.26, 3.2 + Math.cos(mouthAngle) * 0.08, 0.42);
+      snowman.add(piece);
+    }
+    for (let i = 0; i < 3; i++) {                           // coal buttons
+      const button = new T.Mesh(new T.SphereGeometry(0.07, 6, 4), coal());
+      button.position.set(0, 1.55 + i * 0.5, 0.7 - i * 0.07);
+      snowman.add(button);
+    }
+    for (const side of [-1, 1]) {                           // stick arms
+      const arm = new T.Mesh(new T.CylinderGeometry(0.035, 0.05, 1.3, 5), toon(0x5a3a22));
+      arm.position.set(side * 1.0, 2.55, 0);
+      arm.rotation.z = -side * 1.0;
+      snowman.add(arm);
+    }
+    const scarf = new T.Mesh(new T.TorusGeometry(0.46, 0.11, 8, 20).rotateX(Math.PI / 2), toon(definition.scarf));
+    scarf.position.y = 3.05;
+    const scarfTail = new T.Mesh(new T.BoxGeometry(0.2, 0.7, 0.08), toon(definition.scarf));
+    scarfTail.position.set(0.25, 2.65, 0.5);
+    snowman.add(scarf, scarfTail);
+    if (definition.hat === 'top') {
+      const brim = new T.Mesh(new T.CylinderGeometry(0.6, 0.6, 0.06, 14), toon(0x1a1a22));
+      brim.position.y = 3.98;
+      const crown = new T.Mesh(new T.CylinderGeometry(0.34, 0.38, 0.6, 14), toon(0x1a1a22));
+      crown.position.y = 4.28;
+      snowman.add(brim, crown);
+    } else if (definition.hat === 'beanie') {
+      const beanie = new T.Mesh(new T.SphereGeometry(0.53, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), toon(definition.scarf));
+      beanie.position.y = 3.7;
+      const bobble = new T.Mesh(new T.SphereGeometry(0.12, 8, 6), toon(0xffffff));
+      bobble.position.y = 4.27;
+      snowman.add(beanie, bobble);
+    } else if (definition.hat === 'bucket') {
+      const bucket = new T.Mesh(new T.CylinderGeometry(0.4, 0.3, 0.55, 12), toon(0x9aa3ad));
+      bucket.position.y = 4.1;
+      snowman.add(bucket);
+    }
+    return snowman;
+  }
+  // Scatters the snowmen over the land (at least 0.5 radians apart, away from volcanoes and mountains), using their own
+  // seeded random numbers so that the planet's other random choices are not disturbed.
+  {
+    const snowRandom = PlanetGen.mulberry32(2026), snowScale = K * 0.024;
+    const sites = cand.filter(c => c.h < 0.5 && Math.abs(c.d[1]) < 0.85 && avoidN.every(([avoidDirection, avoidRadius]) => angle(c.n, avoidDirection) > avoidRadius + 0.03));
+    const chosen = [];
+    for (let tries = 0; tries < 4000 && chosen.length < SNOWMAN_DEFS.length && sites.length; tries++) {
+      const site = sites[Math.floor(snowRandom() * sites.length)];
+      if (chosen.some(other => angle(other.n, site.n) < 0.5)) continue;
+      chosen.push(site);
+    }
+    chosen.forEach((site, i) => {
+      const definition = SNOWMAN_DEFS[i];
+      const model = makeSnowman(definition);
+      model.scale.setScalar(snowScale);
+      placeOnSurface(model, site.n, 1.0, snowRandom() * 6);
+      iceGroup.add(model);
+      const snowman = { ...definition, n: site.n.clone() };
+      // An invisible sphere round the snowman that you can click or tap.
+      const hitSphere = new T.Mesh(new T.SphereGeometry(1, 8, 6), new T.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+      hitSphere.position.copy(site.n).multiplyScalar(1 + 2 * snowScale);
+      hitSphere.scale.setScalar(2.4 * snowScale);
+      hitSphere.userData = { kind: 'snowman', ref: snowman };
+      iceGroup.add(hitSphere);
+      pickables.push(hitSphere);
+      snowman.label = addLabel(definition.name, site.n, 1 + 4.9 * snowScale, 'snowman', () => select('snowman', snowman));
+      snowman.label.hidden = true;           // shown only in the ice age
+      snowmen.push(snowman);
+    });
+  }
+  const SNOWMAN_BUTTON_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="7" r="3.5"/><circle cx="12" cy="16.5" r="5.5"/><path d="M8 3.5h8M10 3.5V2h4v1.5"/></svg>';
+  let cityButtonIcon = null;     // the city button's normal picture, remembered the first time we swap it
+  // Switches the scenery on or off for the ice age: frozen planet, snowmen in, towns/labels out, and the city button becomes the snowmen button.
+  function setIceAgeScenery(frozen) {
+    frostTarget = frozen ? 1 : 0;
+    iceGroup.visible = frozen;
+    townGroup.visible = !frozen;
+    snowmen.forEach(snowman => { snowman.label.hidden = !frozen; });
+    cities.forEach(city => { city.label.hidden = frozen; city.hit.userData.off = frozen; });
+    if (cityButtonIcon === null) cityButtonIcon = cityBtn.innerHTML;
+    cityBtn.innerHTML = frozen ? SNOWMAN_BUTTON_ICON : cityButtonIcon;
+    cityBtn.title = cityBtn.ariaLabel = frozen ? 'Snowmen' : 'Cities';
+  }
+  tickers.push((t, dt) => { frost.value += (frostTarget - frost.value) * Math.min(1, dt * 2.5); });
+
   /* --- switching ages --- */
   const ageMsg = document.getElementById('ageMsg');   // the "Travelling to the ..." message
   // Switches to the given age ('stone' | 'steam' | 'modern' | 'space'): shows a message, rebuilds the towns, then swaps vehicles, trees and the extra things for that age.
   function setAge(age) {
     if (age === AGE) return;
-    ageMsg.textContent = 'Travelling to the ' + { stone: 'Stone Age', steam: 'Steam Age', modern: 'Modern Age', space: 'Space Age' }[age] + '…';
+    ageMsg.textContent = 'Travelling to the ' + { ice: 'Ice Age', stone: 'Stone Age', steam: 'Steam Age', modern: 'Modern Age', space: 'Space Age' }[age] + '…';
     ageMsg.classList.add('on');
-    setTimeout(() => setTownAge(age, () => {
+    // The ice age has no towns to build, so it skips straight to the scene changes.
+    const rebuildTowns = (done) => age === 'ice' ? done() : setTownAge(age, done);
+    setTimeout(() => rebuildTowns(() => {
       AGE = age;
       window.__age = age;
       document.body.dataset.age = age;                // the page's CSS reacts to this (for example the alien button)
@@ -3263,11 +3398,12 @@ function build() {
       clearTrees(age);
       ageGroups.both.visible = age === 'modern' || age === 'space';
       ageGroups.space.visible = age === 'space';
+      setIceAgeScenery(age === 'ice');
       ageMsg.classList.remove('on');
       if (typeof onAgeChange === 'function') onAgeChange(age);
     }), 60);
   }
-  const AGES = [['stone', '🪨 Stone Age'], ['steam', '🚂 Steam Age'], ['modern', '🏙️ Modern Age'], ['space', '🚀 Space Age']];
+  const AGES = [['ice', '❄️ Ice Age'], ['stone', '🪨 Stone Age'], ['steam', '🚂 Steam Age'], ['modern', '🏙️ Modern Age'], ['space', '🚀 Space Age']];
 
   /* ---------- the alien invasion (space age only, see invasion.js) ---------- */
   // Everything invasion.js needs from this page, handed over in one object (see the notes at the top of invasion.js).
@@ -3294,7 +3430,11 @@ function build() {
   // The three drop-down lists: Cities, Wonders (volcanoes, storms and, in the space age, the launch pad and station) and Travel in time.
   // `items` is a list of [button text, what to do when tapped]; Wonders and Travel in time are rebuilt each time they open (get items()).
   const LISTS = {
-    city: { btn: cityBtn, title: 'Cities', items: cities.map(city => [city.name, () => select('city', city)]) },
+    city: {      // in the ice age there are no cities, so this list becomes the snowmen
+      btn: cityBtn,
+      get title() { return AGE === 'ice' ? 'Snowmen' : 'Cities'; },
+      get items() { return AGE === 'ice' ? snowmen.map(snowman => [snowman.name, () => select('snowman', snowman)]) : cities.map(city => [city.name, () => select('city', city)]); },
+    },
     wonder: {
       btn: wonderBtn, title: 'Wonders',
       get items() {
@@ -3399,7 +3539,16 @@ function build() {
         tile.mesh.material.map = texture;
         tile.mesh.material.needsUpdate = true;
       } else {
-        tile.mesh = new T.Mesh(tileMesh(tile.n), new T.MeshLambertMaterial({ map: texture, transparent: true, depthWrite: false, opacity: 0 }));
+        const tileMaterial = new T.MeshLambertMaterial({ map: texture, transparent: true, depthWrite: false, opacity: 0 });
+        // Frozen like the planet underneath. Tiles have no sea mask, so "sea" is guessed from the colour being bluer than red.
+        tileMaterial.onBeforeCompile = shader => {
+          shader.uniforms.uFrost = frost;
+          shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uFrost;')
+            .replace('#include <map_fragment>', `#include <map_fragment>
+            vec3 frozenColor = mix(vec3(0.94, 0.97, 1.0), vec3(0.70, 0.86, 0.97), smoothstep(0.02, 0.25, diffuseColor.b - diffuseColor.r));
+            diffuseColor.rgb = mix(diffuseColor.rgb, frozenColor, uFrost * 0.97);`);
+        };
+        tile.mesh = new T.Mesh(tileMesh(tile.n), tileMaterial);
         tile.mesh.renderOrder = 1;
         tile.mesh.frustumCulled = false;
         planetGroup.add(tile.mesh);
@@ -3455,7 +3604,7 @@ function build() {
   world = { P, cities, volcanoes, storms, boats, selectBoat, clearBoat, boatSelected: () => !!selectedBoat };
   // Debugging: add ?debug to the address to reach the world from the browser console as window.__np.
   if (new URLSearchParams(location.search).has('debug')) window.__np = { invade: () => { startInvasion(); return invasion; }, setAge: a => setAge(a), launch, satellites, countries, camera, controls, scene, planetGroup, boats, storms, volcanoes, cities, rail, T, tilted: () => tiltedMat,
-    blackHole: () => { startBlackHole(); return blackHole; }, station, tickers };
+    blackHole: () => { startBlackHole(); return blackHole; }, station, tickers, snowmen };
   // Debugging: ?go=volcano | volcano2 | volcano3 | storm | storm2 | city3 | boat2 jumps straight to that thing (and ?d= sets the camera distance).
   const goTarget = new URLSearchParams(location.search).get('go');
   if (goTarget) setTimeout(() => {
@@ -3502,7 +3651,7 @@ function updateLabels() {
   for (const label of labels) {
     const facing = label.n.dot(cameraPosition) - 1;                 // >0: on the visible hemisphere
     _v.copy(label.pos).project(camera);
-    const show = facing > 0.04 && cameraDistance < 4.4 && _v.z < 1;
+    const show = !label.hidden && facing > 0.04 && cameraDistance < 4.4 && _v.z < 1;
     label.el.style.opacity = show ? Math.min(1, facing * 6) : 0;
     label.el.style.pointerEvents = show ? 'auto' : 'none';
     label.el.style.transform = `translate(${(_v.x * .5 + .5) * screenWidth}px,${(-_v.y * .5 + .5) * screenHeight}px) translate(-50%,-135%)`;
@@ -3564,6 +3713,55 @@ const LAKE_LINES = [
   "One lone penguin skates here, every single day, practising spins, jumps, and the occasional wildly over-ambitious triple axel — with nobody watching, and no competition to win.",
   "Local legend says this penguin has never once fallen over. Local legend has also never actually stayed around to watch the whole routine."
 ];
+// Draws the animated 112 x 112 picture on a snowman's card at time t seconds: a shivering, scowling snowman in falling snow,
+// with the scarf and hat colours of this particular snowman (`snowman.scarf`, `snowman.hat`).
+function drawSnowmanCloseup(context, t, snowman) {
+  const css = hex => '#' + hex.toString(16).padStart(6, '0');
+  context.clearRect(0, 0, 112, 112);
+  const skyGradient = context.createLinearGradient(0, 0, 0, 112);
+  skyGradient.addColorStop(0, '#9fb6cc');
+  skyGradient.addColorStop(1, '#e4f0f8');
+  context.fillStyle = skyGradient;
+  context.fillRect(0, 0, 112, 112);
+  context.fillStyle = '#fafdff';                           // snowy ground
+  context.beginPath();
+  context.ellipse(56, 112, 80, 24, 0, 0, 6.283);
+  context.fill();
+  const shiver = Math.sin(t * 38) * 0.8;                    // a constant tiny shake: it is very cold
+  const outline = () => { context.strokeStyle = '#2a4a66'; context.lineWidth = 1.6; context.stroke(); };
+  const circle = (x, y, radius) => { context.fillStyle = '#ffffff'; context.beginPath(); context.arc(x + shiver, y, radius, 0, 6.283); context.fill(); outline(); };
+  circle(56, 88, 20); circle(56, 58, 14.5); circle(56, 34, 10.5);
+  // stick arms
+  context.strokeStyle = '#5a3a22'; context.lineWidth = 2;
+  context.beginPath(); context.moveTo(44 + shiver, 58); context.lineTo(26, 46); context.moveTo(68 + shiver, 58); context.lineTo(86, 46); context.stroke();
+  // scarf
+  context.fillStyle = css(snowman.scarf);
+  context.fillRect(45 + shiver, 42, 22, 5);
+  context.fillRect(60 + shiver, 44, 5, 14);
+  // hat
+  if (snowman.hat === 'top') { context.fillStyle = '#1a1a22'; context.fillRect(44 + shiver, 22, 24, 3); context.fillRect(48 + shiver, 10, 16, 13); }
+  else if (snowman.hat === 'beanie') { context.fillStyle = css(snowman.scarf); context.beginPath(); context.arc(56 + shiver, 28, 10.5, Math.PI, 0); context.fill(); context.fillStyle = '#fff'; context.beginPath(); context.arc(56 + shiver, 16, 3, 0, 6.283); context.fill(); }
+  else if (snowman.hat === 'bucket') { context.fillStyle = '#9aa3ad'; context.beginPath(); context.moveTo(47 + shiver, 14); context.lineTo(65 + shiver, 14); context.lineTo(62 + shiver, 27); context.lineTo(50 + shiver, 27); context.fill(); }
+  // grumpy face: a blink every few seconds, slanted brows, carrot nose, frown
+  const blinking = (t % 4) > 3.85;
+  context.fillStyle = '#15121e'; context.strokeStyle = '#15121e'; context.lineWidth = 1.6;
+  for (const side of [-1, 1]) {
+    const eyeX = 56 + side * 4.5 + shiver;
+    if (blinking) { context.beginPath(); context.moveTo(eyeX - 1.5, 35); context.lineTo(eyeX + 1.5, 35); context.stroke(); }
+    else { context.beginPath(); context.arc(eyeX, 35, 1.5, 0, 6.283); context.fill(); }
+    context.beginPath(); context.moveTo(eyeX - side * 3.5, 30.5); context.lineTo(eyeX + side * 2.5, 32.8); context.stroke();   // brow: sloping down toward the nose
+  }
+  context.fillStyle = '#ff8a1f';
+  context.beginPath(); context.moveTo(56 + shiver, 36); context.lineTo(67 + shiver, 39); context.lineTo(56 + shiver, 41); context.fill();
+  context.strokeStyle = '#15121e';
+  context.beginPath(); context.arc(56 + shiver, 46, 5, 1.15 * Math.PI, 1.85 * Math.PI); context.stroke();   // frown
+  // falling snow
+  context.fillStyle = '#ffffff';
+  for (let i = 0; i < 26; i++) {
+    const x = (i * 37 + Math.sin(t * 1.3 + i) * 6) % 112, y = ((t * (14 + (i % 5) * 4) + i * 29) % 124) - 6;
+    context.beginPath(); context.arc(x, y, 1 + (i % 3) * 0.5, 0, 6.283); context.fill();
+  }
+}
 // Draws the animated 112 x 112 picture on Marshmallow Falls' card at time t seconds: marshmallows tumbling down the
 // cliff into a pool, two pink minnows swimming (and sometimes leaping), and now and then a bear wandering past.
 function drawFallsCloseup(context, t) {
@@ -3727,6 +3925,7 @@ function select(kind, c) {
   else if (kind === 'falls') { n = c.n; dist = 1.4; showCard(c.name, FALLS_LINES, drawFallsCloseup); }
   else if (kind === 'glacier') { n = c.n; dist = 1.55; showCard(c.name, GLACIER_LINES, drawGlacierCloseup); }
   else if (kind === 'lake') { n = c.n; dist = 1.4; showCard(c.name, LAKE_LINES); }
+  else if (kind === 'snowman') { n = c.n; dist = 1.3; showCard(c.name, c.lines, (context, t) => drawSnowmanCloseup(context, t, c)); }
   setFocus(n, dist);
 }
 /* ---------- focus: a tapped thing is centred and stays centred (moving things are followed) ---------- */
