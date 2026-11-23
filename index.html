@@ -3283,7 +3283,7 @@ function build() {
   /* ---------- the black hole (space age only, see blackhole.js) ---------- */
   // Everything blackhole.js needs from this page. It appears (see onAliensGone above) once an invasion has run
   // to completion, and stays dormant in the background until the button below is pressed.
-  const bhCtx = { T, scene, planetGroup, camera, renderer, canvas, controls, station, satellites, volcanoes, tickers, partShader, planetMat, toon,
+  const bhCtx = { T, scene, planetGroup, atmosphere: [atmoOut, atmoIn], camera, renderer, canvas, controls, station, satellites, volcanoes, tickers, partShader, planetMat, toon,
     onEnd: () => { blackHole = null; document.body.classList.remove('bh-active'); } };
   let blackHole = null;      // the running black-hole sequence, or null
   const startBlackHole = () => { if (!blackHole && AGE === 'space') blackHole = NPBlackHole.start(bhCtx); };

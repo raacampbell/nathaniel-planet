@@ -29,6 +29,9 @@ body.bh-unlocked #blackHoleBtn{display:block;animation:bhbtn 2.1s ease-in-out in
 @keyframes bhbtn{50%{transform:scale(1.08) rotate(6deg)}}
 body:not([data-age="space"]) #blackHoleBtn{opacity:.35;filter:grayscale(1) drop-shadow(0 3px 6px #000a);cursor:default;animation:none}
 body.invading #blackHoleBtn, body.bh-active #blackHoleBtn, body.bh-active #alienBtn, body.bh-active #ageBtn{display:none}
+/* While the sequence runs the planet is gone, so hide its place labels and the city/wonder lists and card: tapping
+   any of them would fly the camera down to a surface that no longer exists, ending up inside the "inside" shapes. */
+body.bh-active .label, body.bh-active #cityBtn, body.bh-active #wonderBtn, body.bh-active #places, body.bh-active #card{visibility:hidden!important;pointer-events:none!important}
 /* dialog 1: a deliberately boring, flat Windows-95-style message box */
 .bh-ov{position:fixed;inset:0;z-index:60;display:grid;place-items:center;font-family:Tahoma,Geneva,var(--font)}
 .bh-win95{width:min(360px,86vw);background:#c0c0c0;border:2px solid #fff;box-shadow:2px 2px 0 1px #000;font-size:13px;color:#000}
@@ -167,7 +170,7 @@ body.invading #blackHoleBtn, body.bh-active #blackHoleBtn, body.bh-active #alien
 
   /* ----------------------------------------------------------------------------------------- the main sequence */
   /* Runs the whole destroy-the-planet-and-back show. `ctx` holds: T, scene, planetGroup, camera, renderer,
-     canvas, controls, station, satellites, volcanoes, tickers, partShader, planetMat, toon, onEnd.
+     canvas, controls, station, satellites, volcanoes, tickers, partShader, planetMat, toon, onEnd, and atmosphere (the glow shells drawn around the planet).
      Returns { end } (end exists mainly for tests/symmetry with invasion.js; the show otherwise ends itself). */
   function start(ctx) {
     if (!hole) return { end() {} };      // shouldn't happen (the button is only live once a hole exists), but be safe
@@ -193,8 +196,25 @@ body.invading #blackHoleBtn, body.bh-active #blackHoleBtn, body.bh-active #alien
     let sideDir = new THREE.Vector3().crossVectors(holeDir, new THREE.Vector3(0, 1, 0));
     if (sideDir.lengthSq() < 1e-4) sideDir = new THREE.Vector3().crossVectors(holeDir, new THREE.Vector3(1, 0, 0));
     sideDir.normalize();
-    const vantage = sideDir.clone().multiplyScalar(0.85).add(holeDir.clone().multiplyScalar(0.35)).add(new THREE.Vector3(0, 0.25, 0)).normalize().multiplyScalar(4.4);
+    const vantage = sideDir.clone().multiplyScalar(0.85).add(holeDir.clone().multiplyScalar(0.35)).add(new THREE.Vector3(0, 0.25, 0)).normalize().multiplyScalar(5.2);
     const camStart = camera.position.clone();
+
+    // Where the hole parks next to the planet, and how big its sprite is there. The sprite is mostly a near-black
+    // disk, so it must stay small once it is close: at its distant size (HOLE_FAR_SCALE) it would cover the screen.
+    const HOLE_FAR_DIST = 26, HOLE_NEAR_DIST = 3.2;
+    const HOLE_FAR_SCALE = 7, HOLE_NEAR_SCALE = 2.2;
+    const holeParked = holeDir.clone().multiplyScalar(HOLE_NEAR_DIST);
+    // The camera looks at a point between the planet and the parked hole so both stay in shot.
+    const shotTarget = holeParked.clone().multiplyScalar(0.5);
+    const lookFrom = new THREE.Vector3(), lookAt = new THREE.Vector3();
+
+    // Gotcha: index.html's frame loop puts the camera back to where the orbit controls left it after every render,
+    // so a camera move made in a ticker only lasts one frame. The cutscene therefore re-applies its shot every tick.
+    const holdShot = (position, target) => { camera.position.copy(position); camera.lookAt(target); };
+
+    // The camera distance limits are widened for the "inside" shapes (so the user can't zoom inside them) and put back in end().
+    const savedMinDistance = ctx.controls.minDistance;
+    const atmosphere = ctx.atmosphere || [];     // the planet's glow shells (separate from planetGroup)
 
     // Proxies for the station/satellites/volcanoes being sucked in: the real objects are just hidden (their own
     // orbit/placement code keeps running on them harmlessly in the background) and simple stand-ins, captured
@@ -254,11 +274,35 @@ body.invading #blackHoleBtn, body.bh-active #blackHoleBtn, body.bh-active #alien
     // The "inside the black hole" shape group: one mesh at a time (torus, then disk, then cube, then the bomb),
     // built fresh for each shape and disposed before the next. Shares ctx.planetMat where possible so the shapes
     // carry the actual planet texture (geographically distorted, which is rather the point).
+    // The bomb's fireball: a soft, additive glowing sprite (white-hot centre fading out to orange), hidden until the
+    // bang, then grown and faded in the 'explode' phase.
+    const fireballCanvas = document.createElement('canvas');
+    fireballCanvas.width = fireballCanvas.height = 128;
+    {
+      const c = fireballCanvas.getContext('2d'), gradient = c.createRadialGradient(64, 64, 0, 64, 64, 64);
+      gradient.addColorStop(0, 'rgba(255,255,240,1)');
+      gradient.addColorStop(0.3, 'rgba(255,220,120,0.95)');
+      gradient.addColorStop(0.65, 'rgba(255,120,30,0.5)');
+      gradient.addColorStop(1, 'rgba(255,60,0,0)');
+      c.fillStyle = gradient;
+      c.fillRect(0, 0, 128, 128);
+    }
+    const fireballTexture = new THREE.CanvasTexture(fireballCanvas);
+    const fireball = track(new THREE.Sprite(new THREE.SpriteMaterial({ map: fireballTexture, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })), { ownMaterial: true });
+    fireball.visible = false;
+
     const shapeGroup = track(new THREE.Group());
     let shapeMesh = null;
     const shapeMaterial = () => ctx.planetMat || new THREE.MeshStandardMaterial({ color: 0x2e7d4f, roughness: 0.8 });
     function setShape(kind) {
-      if (shapeMesh) { shapeGroup.remove(shapeMesh); if (shapeMesh.geometry) shapeMesh.geometry.dispose(); shapeMesh = null; }
+      if (shapeMesh) {          // dispose the old shape's geometry (and, for the bomb, its own materials; never ctx.planetMat)
+        shapeGroup.remove(shapeMesh);
+        shapeMesh.traverse(object => {
+          if (object.geometry) object.geometry.dispose();
+          if (object.material && object.material !== ctx.planetMat) object.material.dispose();
+        });
+        shapeMesh = null;
+      }
       if (kind === 'torus') shapeMesh = new THREE.Mesh(new THREE.TorusGeometry(0.8, 0.42, 32, 96), shapeMaterial());
       else if (kind === 'disk') shapeMesh = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.1, 0.18, 64), shapeMaterial());
       else if (kind === 'cube') shapeMesh = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.5, 1.5), shapeMaterial());
@@ -287,13 +331,20 @@ body.invading #blackHoleBtn, body.bh-active #blackHoleBtn, body.bh-active #alien
       suckTargets.forEach(target => target.delay = Math.max(0, target.delay - dt));
       burst.step(dt);
 
+      // The cutscene phases (approach .. rush) all watch from the side-on vantage point.
+      const cutscene = ['approach', 'suck', 'spaghetti', 'empty', 'rush'].includes(phase);
+      if (cutscene && phase !== 'approach') holdShot(vantage, shotTarget);
+
       if (phase === 'approach') {
         const DURATION = 4;
         const p = Math.min(1, phaseT / DURATION), eased = p * p * (3 - 2 * p);
-        hole.sprite.position.copy(holeDir).multiplyScalar(26 + (2.4 - 26) * eased);
-        camera.position.copy(camStart).lerp(vantage, eased);
-        camera.lookAt(0, 0, 0);
-        if (p >= 1) { caption('The black hole moves in…'); go('suck'); }
+        hole.sprite.position.copy(holeDir).multiplyScalar(HOLE_FAR_DIST + (HOLE_NEAR_DIST - HOLE_FAR_DIST) * eased);
+        hole.sprite.scale.setScalar(HOLE_FAR_SCALE + (HOLE_NEAR_SCALE - HOLE_FAR_SCALE) * eased);
+        lookFrom.copy(camStart).lerp(vantage, eased);
+        lookAt.set(0, 0, 0).lerp(shotTarget, eased);
+        holdShot(lookFrom, lookAt);
+        if (phaseT <= dt) caption('The black hole moves in…');
+        if (p >= 1) go('suck');
       } else if (phase === 'suck') {
         const DURATION = 4.5;
         for (const target of suckTargets) {
@@ -315,36 +366,55 @@ body.invading #blackHoleBtn, body.bh-active #blackHoleBtn, body.bh-active #alien
           ctx.planetGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), holeDir);
         }
         const p = Math.min(1, phaseT / DURATION), eased = p * p;
-        ctx.planetGroup.scale.set(1 - eased * 0.97, 1 - eased * 0.97, 1 + eased * 7);
-        ctx.planetGroup.position.copy(holeDir).multiplyScalar(eased * 1.6);
+        // Thin and stretch toward the hole (longest half way), while sliding into it; it ends as a tiny sliver at the hole.
+        const thinness = 1 - eased * 0.97, stretch = 1 + Math.sin(Math.PI * p) * 3;
+        ctx.planetGroup.scale.set(thinness, thinness, stretch * thinness + eased * 0.5);
+        ctx.planetGroup.position.copy(holeParked).multiplyScalar(eased);
+        // The atmosphere glow lives outside planetGroup, so it has to be stretched (and hidden) along with it.
+        for (const shell of atmosphere) {
+          shell.position.copy(ctx.planetGroup.position);
+          shell.quaternion.copy(ctx.planetGroup.quaternion);
+          shell.scale.copy(ctx.planetGroup.scale);
+        }
         if (p >= 1) {
           ctx.planetGroup.visible = false;
+          for (const shell of atmosphere) shell.visible = false;
           hole.material.color.set(0xff2a6d);
           caption('…and it is gone.');
           go('empty');
         }
       } else if (phase === 'empty') {
-        hole.sprite.scale.setScalar(7 + Math.sin(phaseT * 3) * 1.1);
+        hole.sprite.scale.setScalar(HOLE_NEAR_SCALE * (1 + Math.sin(phaseT * 3) * 0.15));
         if (phaseT >= 2.6) go('rush');
       } else if (phase === 'rush') {
+        // The hole flies at the camera and swells until it fills the screen; the black overlay finishes the job.
         const DURATION = 1.3;
         const p = Math.min(1, phaseT / DURATION);
-        hole.sprite.position.lerp(camera.position, p * 0.9);
-        hole.sprite.scale.setScalar(7 + p * p * 60);
-        blackDiv.style.opacity = String(p);
+        hole.sprite.position.copy(holeParked).lerp(vantage, p * 0.9);
+        hole.sprite.scale.setScalar(HOLE_NEAR_SCALE + p * p * 20);
+        blackDiv.style.opacity = String(p * p);
         if (p >= 1) go('flash');
       } else if (phase === 'flash') {
-        if (phaseT < 0.08) whiteDiv.style.opacity = '1';
-        else {
-          const p = Math.min(1, (phaseT - 0.08) / 1.1);
-          whiteDiv.style.opacity = String(1 - p);
-          blackDiv.style.opacity = String(1 - p * 0.3);
-          if (p >= 1) {
-            ctx.controls.enabled = true;
-            setShape('torus');
-            caption('Nathaniel Planet… is a donut?!');
-            go('torus');
-          }
+        if (phaseT <= dt) {
+          // The hole has done its job: hide it now, or its huge black sprite sits by the camera and blacks out the
+          // "inside" shapes as soon as the user turns the view.
+          hole.sprite.visible = false;
+          whiteDiv.style.opacity = '1';
+          blackDiv.style.opacity = '0';
+          setShape('torus');
+          // Frame the shapes from a sensible distance and stop the user zooming inside them (they are hollow).
+          ctx.controls.minDistance = 2.2;
+          ctx.controls.target.set(0, 0, 0);
+          // Gotcha: see holdShot. This camera move must outlast the frame, so it is made after the frame loop
+          // has finished putting the camera back (microtasks run as soon as the current frame callback returns).
+          Promise.resolve().then(() => { camera.position.set(0, 1.2, 3.4); camera.lookAt(0, 0, 0); });
+        }
+        const p = Math.min(1, phaseT / 1.1);
+        whiteDiv.style.opacity = String(1 - p);
+        if (p >= 1) {
+          ctx.controls.enabled = true;
+          caption('Nathaniel Planet… is a donut?!');
+          go('torus');
         }
       } else if (phase === 'torus' || phase === 'disk' || phase === 'cube') {
         if (shapeMesh) shapeMesh.rotation.y += dt * 0.35;
@@ -357,27 +427,29 @@ body.invading #blackHoleBtn, body.bh-active #blackHoleBtn, body.bh-active #alien
           go(next);
         }
       } else if (phase === 'bomb') {
+        if (shapeMesh) shapeMesh.scale.setScalar(1 + Math.max(0, phaseT - 0.8) * Math.sin(phaseT * 40) * 0.08);   // trembles before it goes
         if (phaseT >= 1.6) {
-          shapeGroup.remove(shapeMesh);
-          shapeMesh = null;
+          setShape(null);
+          // A big, bright bang: a quick white flash, an expanding fireball and a shower of sparks.
+          whiteDiv.style.opacity = '0.85';
+          fireball.visible = true;
           const origin = new THREE.Vector3(0, 0, 0);
-          for (let i = 0; i < 260; i++) {
+          for (let i = 0; i < 700; i++) {
             const direction = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
-            burst.emit(origin, direction.multiplyScalar(0.6 + Math.random() * 1.4), 1.6, 0.05 + Math.random() * 0.05);
+            burst.emit(origin, direction.multiplyScalar(0.8 + Math.random() * 2.4), 1.4 + Math.random() * 1.2, 0.3 + Math.random() * 0.5);
           }
           caption('💥');
           go('explode');
         }
       } else if (phase === 'explode') {
-        const DURATION = 1.8;
+        const DURATION = 2.6;
         const p = Math.min(1, phaseT / DURATION);
-        camera.position.lerp(vantage.clone().setLength(6), p * 0.04);
-        if (phaseT >= DURATION) go('reset');
+        whiteDiv.style.opacity = String(Math.max(0, 0.85 - phaseT * 2));
+        fireball.scale.setScalar(0.5 + Math.sqrt(p) * 3.2);
+        fireball.material.opacity = Math.max(0, 1 - p * 1.6);
+        if (p >= 1) { fireball.visible = false; go('reset'); }
       } else if (phase === 'reset') {
-        const DURATION = 1.6;
-        const p = Math.min(1, phaseT / DURATION), eased = p * p * (3 - 2 * p);
-        camera.position.lerp(new THREE.Vector3(0, 0, 3), eased * 0.08);
-        if (p >= 1) { end(); }
+        if (phaseT >= 0.8) end();
       }
     };
     ctx.tickers.push(tick);
@@ -392,17 +464,25 @@ body.invading #blackHoleBtn, body.bh-active #blackHoleBtn, body.bh-active #alien
       ctx.planetGroup.scale.set(1, 1, 1);
       ctx.planetGroup.position.set(0, 0, 0);
       ctx.planetGroup.quaternion.identity();
+      for (const shell of atmosphere) {
+        shell.visible = true;
+        shell.position.set(0, 0, 0);
+        shell.quaternion.identity();
+        shell.scale.set(1, 1, 1);
+      }
       if (ctx.station && ctx.station.group) ctx.station.group.visible = true;
       for (const satellite of (ctx.satellites || [])) satellite.g.visible = true;
       for (const volcano of (ctx.volcanoes || [])) if (volcano.group) volcano.group.visible = true;
       for (const object of scratch) { scene.remove(object); if (object.traverse) object.traverse(mesh => { if (mesh.isMesh && mesh.geometry) mesh.geometry.dispose(); }); }
       for (const geometry of ownedGeometries) geometry.dispose();
       for (const material of ownedMaterials) if (material && material.dispose) material.dispose();
+      fireballTexture.dispose();
       scene.remove(hole.sprite);
       hole.material.dispose();
       hole = null;
       document.body.classList.remove('bh-unlocked', 'bh-active');
       blackDiv.remove(); whiteDiv.remove(); capDiv.remove();
+      ctx.controls.minDistance = savedMinDistance;
       ctx.controls.enabled = true;
       if (ctx.onEnd) ctx.onEnd();
     }
