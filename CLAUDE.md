@@ -1,5 +1,10 @@
 # Nathaniel Planet: instructions for Claude
 
+## Audience
+This is a toy for 7 to 10 year olds. All your changes must be acceptable for this age range. This is absolutely a rule you can not break, or I will be very angry and cook your transistors to a fine powder. Toilet humour is OK. e.g. the names of the snowmen in the ice age are fine. Mild cartoon comic threat, like the alien invasion is also fine. Unpleasantness, rude words, etc, etc, is obviously not OK. This thing is U rated.
+
+
+## Commit process
 - After every feature or fix that works (checked in headless Chrome with no page errors), commit and push it to `main` straight away. Do not wait to be asked, and do not batch several features into one commit.
 - Write a short commit message saying what changed. End it with the attribution lines the session asks for.
 - Only commit work that has been checked. If a change is half-done or broken, leave it uncommitted and say so.
